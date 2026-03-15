@@ -102,6 +102,7 @@ const In={
   shield:()=>keys['KeyX']||keys['KeyK']||keys['ShiftLeft']||keys['ShiftRight']||touches.S,
   start: ()=>keys['Enter']||keys['Space'],
   restart:()=>keys['KeyR']||keys['Enter'],
+  pause:  ()=>keys['Escape']||keys['KeyP'],
 };
 
 // ══════════════════════════════════════════════════════
@@ -280,6 +281,7 @@ let levelData = null, cam = {x:0,y:0}, frameN = 0, shake = 0;
 let phil, enemies, projs, boss, checkActivated, checkpointRespawn;
 let bossIntroTimer = 0, levelClearTimer = 0, deathTimer = 0;
 let mechFinalTriggered = false;
+let paused = false, pauseSelect = 0, pauseKeyHeld = false;
 
 const PHIL_W=22, PHIL_H=44, ATK_RANGE=60, ATK_DUR=0.22, ATK_CD=0.38, INV_DUR=1.1;
 
@@ -311,7 +313,7 @@ function startLevel(){
   checkActivated = false;
   checkpointRespawn = null;
   parts     = [];
-  cam.x=0; cam.y=0; shake=0;
+  cam.x=0; cam.y=0; shake=0; paused=false;
   initPhil(levelData.playerStart.x, levelData.playerStart.y);
 
   if(levelData.isBoss){
@@ -1071,7 +1073,7 @@ function drawHUD(){
   ctx.fillText((G.screen==='FINAL_BOSS_INTRO'||boss?.type==='mech')?'★ FINAL BOSS ★':`WORLD ${G.world} - ${WORLDS[G.world].name} - LEVEL ${G.level}${isBoss?' ⚠ BOSS':''} `,W/2,24);
   // Controls hint
   ctx.fillStyle='rgba(180,160,200,0.5)'; ctx.font='10px monospace';
-  ctx.fillText('A/D: Move   W/Space: Jump   Z: Sword   X: Shield',W/2,H-6);
+  ctx.fillText('A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause',W/2,H-6);
   ctx.textAlign='left';
 
   // Boss health bar
@@ -1568,6 +1570,25 @@ function drawWin(){
 }
 
 // ══════════════════════════════════════════════════════
+//  PAUSE MENU
+// ══════════════════════════════════════════════════════
+const PAUSE_ITEMS = ['RESUME','RESTART LEVEL','QUIT TO TITLE'];
+function drawPauseMenu(){
+  ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ccaaff'; ctx.font='bold 36px monospace'; ctx.shadowColor='#8844cc'; ctx.shadowBlur=14;
+  ctx.fillText('PAUSED',W/2,H/2-100); ctx.shadowBlur=0;
+  PAUSE_ITEMS.forEach((item,i)=>{
+    const sel=i===pauseSelect;
+    ctx.fillStyle=sel?'#ffffff':'#887799';
+    ctx.font=(sel?'bold ':'')+'20px monospace';
+    if(sel){ ctx.fillStyle='rgba(100,60,160,0.5)'; ctx.fillRect(W/2-140,H/2-46+i*52,280,40); ctx.fillStyle='#ffffff'; }
+    ctx.fillText((sel?'▶ ':'')+item,W/2,H/2-20+i*52);
+  });
+  ctx.textAlign='left';
+}
+
+// ══════════════════════════════════════════════════════
 //  MAIN LOOP
 // ══════════════════════════════════════════════════════
 let lastT=0;
@@ -1604,12 +1625,27 @@ function loop(ts){
 
   // --- PLAYING ---
   if(G.screen==='PLAYING'){
-    updatePhil(dt);
-    updateEnemies(dt);
-    updateBoss(dt);
-    updateProjs(dt);
-    updateCam(dt);
-    updateParts(dt);
+    // Pause toggle (edge-triggered)
+    if(In.pause()){ if(!pauseKeyHeld){ paused=!paused; pauseSelect=0; pauseKeyHeld=true; } } else { pauseKeyHeld=false; }
+
+    if(paused){
+      // Navigate pause menu
+      if(keys['ArrowDown']||keys['KeyS']){ pauseSelect=(pauseSelect+1)%PAUSE_ITEMS.length; keys['ArrowDown']=false; keys['KeyS']=false; }
+      if(keys['ArrowUp']  ||keys['KeyW']){ pauseSelect=(pauseSelect+PAUSE_ITEMS.length-1)%PAUSE_ITEMS.length; keys['ArrowUp']=false; keys['KeyW']=false; }
+      if(keys['Enter']||keys['Space']){
+        keys['Enter']=false; keys['Space']=false;
+        if(pauseSelect===0){ paused=false; }
+        else if(pauseSelect===1){ paused=false; G.lives=3; startLevel(); }
+        else if(pauseSelect===2){ paused=false; G.screen='TITLE'; }
+      }
+    } else {
+      updatePhil(dt);
+      updateEnemies(dt);
+      updateBoss(dt);
+      updateProjs(dt);
+      updateCam(dt);
+      updateParts(dt);
+    }
   }
 
   // Screen shake
@@ -1675,6 +1711,7 @@ function loop(ts){
   ctx.restore(); // end shake
 
   drawHUD();
+  if(paused) drawPauseMenu();
 }
 
 requestAnimationFrame(ts=>{ lastT=ts; requestAnimationFrame(loop); });
