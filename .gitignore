@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Claude Code internal files
+.claude/
+
+# Editor directories
+.vscode/
+.idea/
