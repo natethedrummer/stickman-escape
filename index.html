@@ -270,9 +270,9 @@ function getBossType(world,level){
 // ══════════════════════════════════════════════════════
 //  GAME STATE
 // ══════════════════════════════════════════════════════
-let G = { screen:'TITLE', world:1, level:1, score:0, highScore:+localStorage.getItem('pe_hs')||0 };
+let G = { screen:'TITLE', world:1, level:1, score:0, highScore:+localStorage.getItem('pe_hs')||0, lives:3 };
 let levelData = null, cam = {x:0,y:0}, frameN = 0, shake = 0;
-let phil, enemies, projs, boss, checkActivated;
+let phil, enemies, projs, boss, checkActivated, checkpointRespawn;
 let bossIntroTimer = 0, levelClearTimer = 0, deathTimer = 0;
 let mechFinalTriggered = false;
 
@@ -304,6 +304,7 @@ function startLevel(){
   projs     = [];
   boss      = null;
   checkActivated = false;
+  checkpointRespawn = null;
   parts     = [];
   cam.x=0; cam.y=0; shake=0;
   initPhil(levelData.playerStart.x, levelData.playerStart.y);
@@ -321,7 +322,7 @@ function startLevel(){
 function nextLevel(){
   G.level++;
   if(G.level>10){
-    if(G.world===1){ G.world=2; G.level=1; phil.health=5.0; } // restore health between worlds
+    if(G.world===1){ G.world=2; G.level=1; phil.health=5.0; G.lives=3; } // restore health and lives between worlds
     else if(G.world===2){
       // Final boss
       G.screen='FINAL_BOSS_INTRO'; bossIntroTimer=3.5;
@@ -432,6 +433,7 @@ function updatePhil(dt){
     const flagBox={x:levelData.checkX-15,y:levelData.checkY-80,w:30,h:90};
     if(overlap(phil,flagBox)){
       checkActivated=true; SFX.checkpoint();
+      checkpointRespawn={x:levelData.checkX-PHIL_W/2, y:GROUND_Y-PHIL_H-1};
       burst(levelData.checkX,levelData.checkY-20,'#4488ff',10,60,0);
       scorePopup(levelData.checkX,levelData.checkY-50,'+100','#4488ff');
       G.score+=100;
@@ -458,7 +460,18 @@ function philDie(){
   phil.dead=true; phil.deathTimer=1.8;
   burst(phil.x+phil.w/2,phil.y+phil.h/2,'#4488ff',20,150,400);
   SFX.die(); shake=0.7;
-  setTimeout(()=>{ G.screen='GAME_OVER'; },1800);
+  G.lives--;
+  if(G.lives>0){
+    setTimeout(()=>{ respawnPhil(); },1800);
+  } else {
+    setTimeout(()=>{ G.screen='GAME_OVER'; },1800);
+  }
+}
+
+function respawnPhil(){
+  const sp=checkpointRespawn||levelData.playerStart;
+  initPhil(sp.x,sp.y);
+  G.screen='PLAYING';
 }
 
 function levelComplete(){
@@ -1044,6 +1057,9 @@ function drawHUD(){
   // Score
   ctx.fillStyle='#ffd700'; ctx.font='bold 14px monospace'; ctx.textAlign='left';
   ctx.fillText('SCORE: '+G.score,200,24);
+  // Lives
+  ctx.fillStyle='#88aaff'; ctx.font='bold 13px monospace';
+  ctx.fillText('LIVES: '+G.lives,360,24);
   // Level indicator
   ctx.textAlign='center'; ctx.fillStyle='#ccaaff'; ctx.font='13px monospace';
   const isBoss=(G.level===5||G.level===10);
@@ -1525,7 +1541,7 @@ function drawGameOver(){
   ctx.textAlign='center';
   ctx.fillStyle='#ff2222'; ctx.font='bold 60px monospace'; ctx.shadowColor='#ff0000'; ctx.shadowBlur=20;
   ctx.fillText('CAPTURED!',W/2,H/2-70); ctx.shadowBlur=0;
-  ctx.fillStyle='#bbaaaa'; ctx.font='18px monospace'; ctx.fillText('Phil was recaptured by the Stickman Army...',W/2,H/2-10);
+  ctx.fillStyle='#bbaaaa'; ctx.font='18px monospace'; ctx.fillText('Phil used all his lives and was recaptured...',W/2,H/2-10);
   ctx.fillStyle='#ffd700'; ctx.font='20px monospace'; ctx.fillText('Score: '+G.score,W/2,H/2+35);
   if(Math.sin(frameN*.07)>0){ ctx.fillStyle='#ccaaff'; ctx.font='bold 18px monospace'; ctx.fillText('PRESS R OR ENTER TO TRY AGAIN',W/2,H/2+85); }
   ctx.textAlign='left';
@@ -1557,9 +1573,9 @@ function loop(ts){
   ctx.clearRect(0,0,W,H);
 
   // --- TITLE ---
-  if(G.screen==='TITLE'){ drawTitle(); if(In.start()){ initAC(); G.world=1;G.level=1;G.score=0; startLevel(); } return; }
+  if(G.screen==='TITLE'){ drawTitle(); if(In.start()){ initAC(); G.world=1;G.level=1;G.score=0;G.lives=3; startLevel(); } return; }
   // --- GAME OVER ---
-  if(G.screen==='GAME_OVER'){ drawBackground(); drawPlatforms(); drawGameOver(); if(In.restart()){ initAC(); G.world=1;G.level=1;G.score=0;startLevel(); } return; }
+  if(G.screen==='GAME_OVER'){ drawBackground(); drawPlatforms(); drawGameOver(); if(In.restart()){ initAC(); G.world=1;G.level=1;G.score=0;G.lives=3;startLevel(); } return; }
   // --- WIN ---
   if(G.screen==='WIN'){ drawWin(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.screen='TITLE'; } return; }
 
