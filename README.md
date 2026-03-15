@@ -8,7 +8,9 @@ Phil is a warrior from the Stickman Army who's trying to break free. Fight throu
 
 ## Play
 
-Open `index.html` in any modern browser (Chrome, Firefox, Safari, Edge).
+**Play online:** https://natethedrummer.github.io/stickman-escape/
+
+Or open `index.html` in any modern browser (Chrome, Firefox, Safari, Edge).
 
 ---
 
