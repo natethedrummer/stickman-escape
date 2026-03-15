@@ -71,6 +71,41 @@ Mobile touch controls appear automatically on touch devices.
 
 ---
 
+## Roadmap
+
+The current game is a complete v1.0 experience. Here's what's planned:
+
+### Core improvements
+- **Checkpoint respawn** — dying respawns Phil at the last blue flag instead of ending the run
+- **Save progress** — remember which world/level you've reached between sessions
+- **Difficulty modes** — Easy / Normal / Hard with tuned enemy speed, damage, and boss health
+- **Pause menu** — Escape key to pause mid-level, with resume / restart / quit options
+
+### More content
+- **New worlds** — additional themes beyond Forest and Desert
+- **More enemy types** — heavy soldiers, bomb throwers, flying enemies
+- **Environmental hazards** — moving saws, lava pits, falling rocks
+- **Moving platforms** — horizontal movers, elevators, falling platforms
+- **Collectible power-ups** — health refills, invincibility stars, speed boosts, score multipliers
+- **Kill combo system** — chain kills quickly for a score multiplier
+
+### Polish & progression
+- **World map & level select** — visual overworld with locked/unlocked level nodes
+- **Unlockable character skins** — cosmetic rewards for completing worlds and achievements
+- **Story cutscenes** — canvas-drawn comic panels at key moments (intro, boss fights, ending)
+- **Settings screen** — volume controls and fullscreen toggle
+
+### Creator tools
+- **Level maker** — in-browser editor to build and test custom levels
+- **Share levels via URL** — encode custom levels into a shareable link (no backend needed)
+
+### Online
+- **GitHub Pages deployment** — play in the browser without downloading anything
+
+All open issues and discussion live in the [GitHub Issues](https://github.com/natethedrummer/stickman-escape/issues) tab.
+
+---
+
 ## Version History
 
 See [CHANGELOG.md](CHANGELOG.md).
