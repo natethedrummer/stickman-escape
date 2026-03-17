@@ -491,6 +491,7 @@ function respawnPhil(){
 
 function levelComplete(){
   G.score+=500; SFX.clear();
+  G.lives=3; phil.health=5.0;
   burst(levelData.flagX,levelData.flagY-20,'#ff3322',16,120,0);
   G.screen='LEVEL_CLEAR'; levelClearTimer=2.5;
 }
