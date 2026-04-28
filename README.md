@@ -2,7 +2,7 @@
 
 A browser-based platformer game built with vanilla HTML5 Canvas and JavaScript — no dependencies, no build step, just open `index.html` and play.
 
-Phil is a warrior from the Stickman Army who's trying to break free. Fight through two worlds packed with enemies, mini-bosses, and world bosses to earn your freedom.
+Phil is a warrior from the Stickman Army who's trying to break free. Fight through six worlds packed with enemies, mini-bosses, and world bosses to earn your freedom.
 
 ---
 
@@ -38,6 +38,10 @@ Mobile touch controls appear automatically on touch devices.
 |-------|-------|--------|-------------------|----------------------|
 | 1 | Forest | 10 | Stickman Giant | Green Anaconda |
 | 2 | Desert | 10 | Stickman Giant | Giant Robot Lizard |
+| 3 | Snow Peaks | 10 | Frost Warden | Yeti |
+| 4 | Factory 999 | 10 | Foreman-9 | Bone Revenant |
+| 5 | Mines | 10 | Tunnel Fiend | Mole Mk.999 |
+| 6 | Berlin | 10 | Riot Captain | FBI Agent |
 | — | Final | — | — | Giant Stickman Mech |
 
 ### Flags
@@ -47,12 +51,18 @@ Mobile touch controls appear automatically on touch devices.
 ### Enemies
 - **Stickman Soldier** — Melee, patrols and chases Phil
 - **Stickman Archer** — Ranged, fires arrows that can be blocked with the shield
+- **Heavy Soldier** — Slow, shielded brute with 4 HP; introduced in World 2 level 3+
+- **Bomb Thrower** — Lobs destroyable bombs and retreats at close range; introduced in World 2 level 5+
+- **Stickman Glider** — Fast flying diver that must be hit with a jump attack; introduced in World 1 level 7+
 
 ### Scoring
 | Event | Points |
 |-------|--------|
 | Kill soldier | +100 |
 | Kill archer | +150 |
+| Kill heavy soldier | +200 |
+| Kill bomb thrower | +175 |
+| Kill glider | +125 |
 | Checkpoint | +100 |
 | Level complete | +500 |
 | Boss kills | +800–3000 |
@@ -64,7 +74,8 @@ Mobile touch controls appear automatically on touch devices.
 - Procedurally generated levels (seeded per world + level number — consistent every run)
 - 5-heart health system with half-heart damage
 - Sword + shield dual combat mechanic
-- 4 unique boss fights with multi-phase AI
+- Expanded enemy roster with shielded heavies, bomb lobbers, and diving gliders
+- 6 themed worlds with 13 boss fights, all using multi-phase AI
 - Parallax scrolling backgrounds
 - Web Audio API synthesized sound effects (no audio files)
 - Particle system for hits, dust, and deaths
@@ -84,8 +95,8 @@ The current game is a complete v1.0 experience. Here's what's planned:
 - **Pause menu** — Escape key to pause mid-level, with resume / restart / quit options
 
 ### More content
-- **New worlds** — additional themes beyond Forest and Desert
-- **More enemy types** — heavy soldiers, bomb throwers, flying enemies
+- **More worlds & routes** — harder regions beyond Berlin, with remixed layouts and hazards
+- **Enemy variants & elite encounters** — tougher remixes beyond the standard roster
 - **Environmental hazards** — moving saws, lava pits, falling rocks
 - **Moving platforms** — horizontal movers, elevators, falling platforms
 - **Collectible power-ups** — health refills, invincibility stars, speed boosts, score multipliers
