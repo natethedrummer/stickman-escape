@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- Boss Rush mode — a shuffled run through all 11 world and mini bosses with the Giant Stickman Mech
+  always last. Health carries between fights (1 heart healed per boss), bosses scale up in health and
+  speed as the run goes on, and clearing 4 / 8 / 12 bosses unlocks the Mario, Sonica and Minion skins
+  for Phil. Selectable from a new title screen menu; unlocks and best score persist to localStorage
+- Title screen menu (Start Game / Boss Rush / Skin) with keyboard and tap support
+
+### Fixed
+- Bone Revenant went permanently invisible and invincible when a split half was hit — the reformed
+  boss spawned 4px inside the floor and was ejected out of the arena ([#47](https://github.com/natethedrummer/stickman-escape/issues/47))
+- `moveCollide` no longer ejects an already-embedded entity sideways out of the level; pre-existing
+  platform overlaps are left to the vertical pass, which lifts the entity out instead
+
+### Added (previously)
 - Story cutscenes drawn as canvas comic panels — an intro, one before each world boss, and an ending
   sequence after the Giant Stickman Mech. Speech, thought and shout bubbles with typewriter text;
   advance by click, tap or key; skippable with Escape or the on-screen SKIP button

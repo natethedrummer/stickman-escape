@@ -487,7 +487,52 @@ function getBossType(world,level){
 // ══════════════════════════════════════════════════════
 //  GAME STATE
 // ══════════════════════════════════════════════════════
-let G = { screen:'TITLE', world:1, level:1, score:0, highScore:+localStorage.getItem('pe_hs')||0, lives:3, seenCuts:{} };
+let G = { screen:'TITLE', mode:'CAMPAIGN', world:1, level:1, score:0, highScore:+localStorage.getItem('pe_hs')||0, lives:3, seenCuts:{} };
+
+// ══════════════════════════════════════════════════════
+//  SKINS  (unlocked by clearing bosses in Boss Rush)
+// ══════════════════════════════════════════════════════
+const SKINS = {
+  phil:   { name:'PHIL',   color:'#4ac8ff', sword:'#c8eeff', unlockAt:0  },
+  mario:  { name:'MARIO',  color:'#e8443a', sword:'#c8eeff', unlockAt:4  },
+  sonica: { name:'SONICA', color:'#2a6de8', sword:'#c8eeff', unlockAt:8  },
+  minion: { name:'MINION', color:'#f4d03f', sword:'#c8eeff', unlockAt:12 },
+};
+const SKIN_ORDER = ['phil','mario','sonica','minion'];
+
+function loadUnlockedSkins(){
+  try{
+    const v=JSON.parse(localStorage.getItem('pe_skins'));
+    if(Array.isArray(v)) return new Set(['phil',...v.filter(s=>SKINS[s])]);
+  }catch(e){}
+  return new Set(['phil']);
+}
+let unlockedSkins = loadUnlockedSkins();
+let currentSkin = SKINS[localStorage.getItem('pe_skin')] ? localStorage.getItem('pe_skin') : 'phil';
+if(!unlockedSkins.has(currentSkin)) currentSkin='phil';
+
+function saveSkins(){
+  try{
+    localStorage.setItem('pe_skins', JSON.stringify([...unlockedSkins]));
+    localStorage.setItem('pe_skin', currentSkin);
+  }catch(e){}
+}
+function skinDef(){ return SKINS[currentSkin]||SKINS.phil; }
+
+// ══════════════════════════════════════════════════════
+//  BOSS RUSH
+// ══════════════════════════════════════════════════════
+// Each boss's canonical arena slot [world, level]. Arena layout, background
+// theme and boss type all key off world/level, so a rush fight can reuse the
+// campaign's level setup wholesale instead of duplicating it. Keyed by boss
+// type, so the Stickman Giant (mini boss of BOTH world 1 and 2) appears once.
+const BOSS_SLOT = {
+  giant:[1,5], anaconda:[1,10], lizard:[2,10], frostwarden:[3,5], yeti:[3,10],
+  foreman:[4,5], revenant:[4,10], tunnelfiend:[5,5], mole:[5,10],
+  captain:[6,5], agent:[6,10],
+};
+const RUSH_TOTAL = Object.keys(BOSS_SLOT).length + 1;   // 11 bosses + the Mech = 12
+let rush = { queue:[], idx:0, cleared:0, speed:1, best:+localStorage.getItem('pe_rush')||0 };
 let levelData = null, cam = {x:0,y:0}, frameN = 0, shake = 0;
 let phil, enemies, projs, pickups, hazards = [], boss, checkActivated, checkpointRespawn, lastSafeGround = null;
 let bossIntroTimer = 0, levelClearTimer = 0, deathTimer = 0;
@@ -549,8 +594,9 @@ function startLevel(){
     const bt = getBossType(G.world, G.level);
     boss = spawnBoss(bt, levelData.worldW);
     const toBossIntro = ()=>{ G.screen='BOSS_INTRO'; bossIntroTimer=3.0; };
-    // World bosses (level 10) get a comic cutscene first; mini bosses go straight in.
-    if(G.level===10) playCutscene('boss'+G.world, toBossIntro);
+    // World bosses (level 10) get a comic cutscene first; mini bosses go straight
+    // in. Boss Rush skips the story beats entirely — it's back-to-back fights.
+    if(G.level===10 && G.mode!=='RUSH') playCutscene('boss'+G.world, toBossIntro);
     else toBossIntro();
   } else {
     G.screen = 'PLAYING';
@@ -569,8 +615,69 @@ function nextLevel(){
   startLevel();
 }
 
+// ── BOSS RUSH RUN ──
+function startRushRun(){
+  G.mode='RUSH'; G.score=0; G.lives=3; G.seenCuts={};
+  const pool=Object.keys(BOSS_SLOT);
+  for(let i=pool.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
+  rush.queue=[...pool,'mech'];    // the Mech is always the finale, never a random pick
+  rush.idx=0; rush.cleared=0; rush.speed=1;
+  startRushFight(5.0);
+}
+
+function startRushFight(health){
+  const type=rush.queue[rush.idx];
+  if(type==='mech'){
+    // Match the campaign's final-boss context so the arena themes as Berlin
+    // rather than inheriting whatever world the previous rush fight used.
+    G.world=TOTAL_WORLDS; G.level=11;
+    startFinalBossLevel();
+  } else {
+    const slot=BOSS_SLOT[type];
+    G.world=slot[0]; G.level=slot[1];
+    startLevel();                 // reuses the campaign arena; skips cutscenes in RUSH mode
+  }
+  phil.health=Math.max(0.5,Math.min(5.0,health));   // health carries across fights
+  applyRushScaling();
+}
+
+// Bosses always start in phase 1 — the ramp is health and speed only. Spawning
+// them already in phase 2 would skip the transition inside hitBoss(), which is
+// what triggers the Bone Revenant's split-into-halves mechanic (see #47).
+function applyRushScaling(){
+  if(!boss) return;
+  const n=rush.cleared;
+  boss.maxHealth=Math.max(1,Math.round(boss.maxHealth*Math.min(1.5,1+0.08*n)));
+  boss.health=boss.maxHealth;
+  rush.speed=Math.min(1.25,1+0.023*n);
+}
+
+function rushBossCleared(){
+  rush.cleared++;
+  phil.health=Math.min(5.0,phil.health+1.0);        // one heart back between fights
+  for(const id of SKIN_ORDER){
+    const s=SKINS[id];
+    if(s.unlockAt===rush.cleared && !unlockedSkins.has(id)){
+      unlockedSkins.add(id); currentSkin=id; saveSkins();
+      SFX.clear(); scorePopup(phil.x+phil.w/2,phil.y-40,'SKIN UNLOCKED: '+s.name,'#ffdd44');
+    }
+  }
+  G.screen='LEVEL_CLEAR'; levelClearTimer=2.5;
+}
+
+function rushNextFight(){
+  rush.idx++;
+  if(rush.idx>=rush.queue.length){
+    if(G.score>rush.best){ rush.best=G.score; try{localStorage.setItem('pe_rush',rush.best);}catch(e){} }
+    if(G.score>G.highScore){ G.highScore=G.score; try{localStorage.setItem('pe_hs',G.highScore);}catch(e){} }
+    G.screen='RUSH_COMPLETE';
+    return;
+  }
+  startRushFight(phil.health);
+}
+
 function canUseWorldCheat(){
-  return G.screen==='PLAYING' && !paused && phil && !phil.dead;
+  return G.screen==='PLAYING' && G.mode!=='RUSH' && !paused && phil && !phil.dead;
 }
 function handleWorldCheatInput(key){
   if(!canUseWorldCheat()){ resetWorldCheat(); return; }
@@ -1388,7 +1495,9 @@ function bossKilled(){
   },i*400);
   const pts = getBossMeta(boss.type).points;
   G.score+=pts;
-  if(boss.type==='mech'){
+  if(G.mode==='RUSH'){
+    setTimeout(()=>{ rushBossCleared(); },3200);
+  } else if(boss.type==='mech'){
     setTimeout(()=>{
       if(G.score>G.highScore){G.highScore=G.score;localStorage.setItem('pe_hs',G.highScore);}
       playCutscene('ending',()=>{ G.screen='WIN'; });
@@ -2931,7 +3040,13 @@ function drawHUD(){
   // Level indicator
   ctx.textAlign='center'; ctx.fillStyle='#ccaaff'; ctx.font='12px monospace';
   const isBoss=(G.level===5||G.level===10);
-  ctx.fillText((G.screen==='FINAL_BOSS_INTRO'||boss?.type==='mech')?'★ FINAL BOSS ★':`WORLD ${G.world} - ${WORLDS[G.world].name} - LEVEL ${G.level}${isBoss?' ⚠ BOSS':''} `,W/2,38);
+  if(G.mode==='RUSH'){
+    const meta=getBossMeta(boss?.type||rush.queue[rush.idx]);
+    ctx.fillStyle='#ffbb55';
+    ctx.fillText(`★ BOSS RUSH - ${Math.min(rush.idx+1,RUSH_TOTAL)} / ${RUSH_TOTAL} - ${(meta.name||'BOSS').toUpperCase()}`,W/2,38);
+  } else {
+    ctx.fillText((G.screen==='FINAL_BOSS_INTRO'||boss?.type==='mech')?'★ FINAL BOSS ★':`WORLD ${G.world} - ${WORLDS[G.world].name} - LEVEL ${G.level}${isBoss?' ⚠ BOSS':''} `,W/2,38);
+  }
   // Controls hint
   const controlsHint='A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause';
   ctx.font='bold 10px monospace';
@@ -2999,7 +3114,7 @@ function drawFlag(x, y, color, waving){
 // ─── STICKMAN DRAW ───
 function drawStickman(x,y,w,h,opts){
   const {facingR,walkCycle,attacking,atkTimer,atkDur,shielding,
-         color,swordColor,shieldColor,invTimer,dead,isPlayer,scale,isArcher,health,maxHealth,type} = opts;
+         color,swordColor,shieldColor,invTimer,dead,isPlayer,scale,isArcher,health,maxHealth,type,skin} = opts;
   const sc=scale||1;
   const cx=x+w/2, by=y+h;
   const dir=facingR?1:-1;
@@ -3098,6 +3213,49 @@ function drawStickman(x,y,w,h,opts){
     }
     // Soldier spear
     if(!isArcher&&!isPlayer&&type!=='bomber'&&type!=='glider'){ ctx.strokeStyle='#8B6914'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(a1x,a1y); ctx.lineTo(a1x+dir*26,a1y-12); ctx.stroke(); ctx.fillStyle='#bbaa22'; ctx.beginPath(); ctx.moveTo(a1x+dir*26,a1y-12); ctx.lineTo(a1x+dir*32,a1y-20); ctx.lineTo(a1x+dir*20,a1y-14); ctx.fill(); }
+  }
+
+  // Skin decoration (Boss Rush unlocks). Drawn in the same local space as the
+  // body above: head centred at (0,-bodyH-headR), torso -bodyH..0, feet at legH.
+  if(isPlayer&&skin&&skin!=='phil'){
+    const hy=-bodyH-headR;                       // head centre
+    const legSwD=Math.sin(walkCycle)*18*sc;
+    if(skin==='mario'){
+      ctx.fillStyle='#b3140b';                    // cap (darker than the red body so it reads)
+      ctx.beginPath(); ctx.arc(0,hy-1.5,headR+1,Math.PI,0); ctx.fill();
+      ctx.fillRect(-headR-1,hy-2.5,headR*2+2,3);  // band
+      ctx.fillRect(dir>0?headR-1:-headR-7,hy-2.5,8,3);   // brim, forward-facing
+      ctx.fillStyle='#f7d9b0';                    // face patch, so the cap stands off the head
+      ctx.beginPath(); ctx.arc(0,hy+2.5,headR-2.5,0,Math.PI); ctx.fill();
+      ctx.fillStyle='#3a2008';                    // moustache
+      ctx.fillRect(-4.5,hy+3,9,2.5);
+      ctx.fillStyle='#2f56c8';                    // overalls
+      ctx.fillRect(-3.5,-bodyH+7,7,bodyH-7);
+    } else if(skin==='sonica'){
+      ctx.fillStyle=color;                        // quills, swept back
+      [[-3,-16,-9],[1,-15,3],[5,-11,9]].forEach(q=>{
+        ctx.beginPath();
+        ctx.moveTo(-dir*(headR-3),hy+q[0]);
+        ctx.lineTo(-dir*(headR-q[1]),hy+q[1]*0.5);
+        ctx.lineTo(-dir*(headR-3),hy+q[2]);
+        ctx.closePath(); ctx.fill();
+      });
+      ctx.fillStyle='#e02b2b';                    // red shoes
+      ctx.beginPath(); ctx.ellipse(dir*(legSwD*.2-2*sc),legH-1,6,3.4,0,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(dir*(2*sc-legSwD*.2),legH-1,6,3.4,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#f7e2c0';                    // muzzle
+      ctx.beginPath(); ctx.arc(dir*3,hy+3,3,0,Math.PI*2); ctx.fill();
+    } else if(skin==='minion'){
+      ctx.strokeStyle='#8d8d95'; ctx.lineWidth=2;  // goggle strap + rim
+      ctx.beginPath(); ctx.moveTo(-headR,hy-1); ctx.lineTo(headR,hy-1); ctx.stroke();
+      ctx.beginPath(); ctx.arc(dir*1.5,hy-1,3.6,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle='#f2f2f2'; ctx.beginPath(); ctx.arc(dir*1.5,hy-1,2.6,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(dir*2.2,hy-1,1.2,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#2f56c8';                     // overalls
+      ctx.fillRect(-3.5,-bodyH+9,7,bodyH-9);
+      ctx.strokeStyle=color; ctx.lineWidth=lw;
+    }
+    ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=lw;
   }
 
   // Giant boss: add club
@@ -3603,6 +3761,57 @@ function drawPickups(){
 }
 
 // ── SCREEN OVERLAYS ──
+// ── TITLE MENU ──
+const TITLE_ITEMS=[
+  { id:'campaign', label:()=>'START GAME' },
+  { id:'rush',     label:()=>'BOSS RUSH' },
+  { id:'skin',     label:()=>'SKIN: '+skinDef().name },
+];
+let titleSelect=0, titleKeyHeld=false;
+function titleBox(i){ return { x:W/2-160, y:372+i*32, w:320, h:28 }; }
+
+function cycleSkin(dir){
+  const un=SKIN_ORDER.filter(s=>unlockedSkins.has(s));
+  let i=un.indexOf(currentSkin); if(i<0) i=0;
+  currentSkin=un[(i+dir+un.length)%un.length];
+  saveSkins(); SFX.pickup();
+}
+
+function titleActivate(){
+  initAC();
+  const id=TITLE_ITEMS[titleSelect].id;
+  if(id==='campaign'){
+    G.mode='CAMPAIGN'; G.world=1;G.level=1;G.score=0;G.lives=3; G.seenCuts={};
+    playCutscene('intro',startLevel);
+  } else if(id==='rush'){
+    startRushRun();
+  } else {
+    cycleSkin(1);
+  }
+}
+
+function handleTitleInput(){
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const left=keys['ArrowLeft']||keys['KeyA'], right=keys['ArrowRight']||keys['KeyD'];
+  const go=keys['Enter']||keys['Space'];
+  if(up||down||left||right||go){
+    if(!titleKeyHeld){
+      titleKeyHeld=true;
+      if(down)       titleSelect=(titleSelect+1)%TITLE_ITEMS.length;
+      else if(up)    titleSelect=(titleSelect+TITLE_ITEMS.length-1)%TITLE_ITEMS.length;
+      else if(left||right){ if(TITLE_ITEMS[titleSelect].id==='skin') cycleSkin(right?1:-1); }
+      else titleActivate();
+    }
+  } else titleKeyHeld=false;
+  // Tap / click a menu row directly (this is how touch devices drive the menu)
+  if(tapPoint){
+    for(let i=0;i<TITLE_ITEMS.length;i++){
+      if(cutInBox(tapPoint,titleBox(i))){ titleSelect=i; tapPoint=null; titleActivate(); return; }
+    }
+    tapPoint=null;
+  }
+}
+
 function drawTitle(){
   // Gradient bg
   const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#0d1a0d'); g.addColorStop(1,'#1a3a10');
@@ -3623,9 +3832,33 @@ function drawTitle(){
   ctx.fillText('Forest  •  Desert  •  Snow Peaks  •  Factory 999  •  Mines  •  Berlin',W/2,330);
   ctx.fillText('13 boss fights, then the final Stickman Mech showdown',W/2,352);
 
-  if(Math.sin(frameN*.06)>0){ ctx.fillStyle='#ffffff'; ctx.font='bold 18px monospace'; ctx.fillText(isTouchDevice?'TAP TO BEGIN':'PRESS ENTER OR SPACE TO BEGIN',W/2,410); }
-  ctx.fillStyle='#556644'; ctx.font='13px monospace'; ctx.fillText('HIGH SCORE: '+G.highScore,W/2,450);
-  ctx.fillStyle='#445544'; ctx.font='11px monospace'; ctx.fillText('WASD/Arrows: Move   Space: Jump   Z: Sword   X: Shield (hold)',W/2,490);
+  // Menu
+  for(let i=0;i<TITLE_ITEMS.length;i++){
+    const b=titleBox(i), sel=(i===titleSelect);
+    ctx.fillStyle=sel?'rgba(60,110,30,0.55)':'rgba(0,0,0,0.3)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle=sel?'#aaff66':'#3a5a30'; ctx.lineWidth=2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+    ctx.fillStyle=sel?'#ffffff':'#8faa80'; ctx.font='bold 16px monospace';
+    ctx.fillText(TITLE_ITEMS[i].label(),W/2,b.y+19);
+    if(sel&&Math.sin(frameN*.12)>0){
+      ctx.fillStyle='#ffcc22'; ctx.font='bold 16px monospace';
+      ctx.fillText('>',b.x-16,b.y+19); ctx.fillText('<',b.x+b.w+16,b.y+19);
+    }
+  }
+  // Locked skin hint
+  const locked=SKIN_ORDER.filter(s=>!unlockedSkins.has(s));
+  ctx.font='11px monospace';
+  if(locked.length){
+    ctx.fillStyle='#667a5a';
+    ctx.fillText('Locked skins: '+locked.map(s=>SKINS[s].name+' ('+SKINS[s].unlockAt+' bosses)').join('   '),W/2,505);
+  } else {
+    ctx.fillStyle='#ccaa44'; ctx.fillText('★ ALL SKINS UNLOCKED ★',W/2,505);
+  }
+  ctx.fillStyle='#556644'; ctx.font='12px monospace';
+  ctx.fillText('HIGH SCORE: '+G.highScore+(rush.best?'    BOSS RUSH BEST: '+rush.best:''),W/2,486);
+  ctx.fillStyle='#445544'; ctx.font='11px monospace';
+  ctx.fillText(isTouchDevice?'Tap a menu option':'Arrows/WASD: Select   Enter: Choose',W/2,524);
   ctx.textAlign='left';
 }
 
@@ -3662,7 +3895,34 @@ function drawLevelClear(){
   const txt=levelData.isBoss?'BOSS DEFEATED!':'LEVEL COMPLETE!';
   ctx.fillText(txt,W/2,H/2-40); ctx.shadowBlur=0;
   ctx.fillStyle='#ffd700'; ctx.font='24px monospace'; ctx.fillText('Score: '+G.score,W/2,H/2+20);
-  ctx.fillStyle='#aacccc'; ctx.font='16px monospace'; ctx.fillText('Continuing...',W/2,H/2+60); ctx.textAlign='left';
+  if(G.mode==='RUSH'){
+    ctx.fillStyle='#ffbb55'; ctx.font='18px monospace';
+    ctx.fillText(`${rush.cleared} / ${RUSH_TOTAL} bosses defeated  •  +1 heart`,W/2,H/2+55);
+    const nxt=rush.queue[rush.idx+1];
+    ctx.fillStyle='#aacccc'; ctx.font='16px monospace';
+    ctx.fillText(nxt?'NEXT: '+getBossMeta(nxt).name:'Final boss down!',W/2,H/2+85);
+  } else {
+    ctx.fillStyle='#aacccc'; ctx.font='16px monospace'; ctx.fillText('Continuing...',W/2,H/2+60);
+  }
+  ctx.textAlign='left';
+}
+
+function drawRushComplete(){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#1a0a20'); g.addColorStop(1,'#3a1030');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffbb55'; ctx.font='bold 60px monospace'; ctx.shadowColor='#ff6600'; ctx.shadowBlur=30;
+  ctx.fillText('BOSS RUSH',W/2,140); ctx.fillText('CLEARED!',W/2,205); ctx.shadowBlur=0;
+  ctx.fillStyle='#ffddaa'; ctx.font='20px monospace';
+  ctx.fillText(`All ${RUSH_TOTAL} bosses defeated, Mech and all!`,W/2,255);
+  ctx.fillStyle='#ffd700'; ctx.font='bold 26px monospace'; ctx.fillText('Final Score: '+G.score,W/2,305);
+  if(G.score>=rush.best){ ctx.fillStyle='#ff88ff'; ctx.font='bold 20px monospace'; ctx.fillText('★ NEW BOSS RUSH BEST ★',W/2,343); }
+  else { ctx.fillStyle='#886688'; ctx.font='16px monospace'; ctx.fillText('Boss Rush best: '+rush.best,W/2,343); }
+  const un=SKIN_ORDER.filter(s=>unlockedSkins.has(s)&&s!=='phil');
+  ctx.fillStyle='#aaddaa'; ctx.font='15px monospace';
+  ctx.fillText(un.length?'Skins unlocked: '+un.map(s=>SKINS[s].name).join(', '):'No new skins this run',W/2,385);
+  if(Math.sin(frameN*.06)>0){ ctx.fillStyle='#ffffff'; ctx.font='bold 18px monospace'; ctx.fillText(isTouchDevice?'TAP TO CONTINUE':'PRESS R OR ENTER TO CONTINUE',W/2,440); }
+  ctx.textAlign='left';
 }
 
 function drawGameOver(){
@@ -4441,11 +4701,13 @@ function loop(ts){
   ctx.clearRect(0,0,W,H);
 
   // --- TITLE ---
-  if(G.screen==='TITLE'){ drawTitle(); if(In.start()){ initAC(); G.world=1;G.level=1;G.score=0;G.lives=3; G.seenCuts={}; playCutscene('intro',startLevel); } return; }
+  if(G.screen==='TITLE'){ drawTitle(); handleTitleInput(); return; }
+  // --- BOSS RUSH COMPLETE ---
+  if(G.screen==='RUSH_COMPLETE'){ drawRushComplete(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.mode='CAMPAIGN'; G.screen='TITLE'; } return; }
   // --- CUTSCENE ---
   if(G.screen==='CUTSCENE'){ updateCutscene(dt); if(cutscene) drawCutscene(); return; }
   // --- GAME OVER ---
-  if(G.screen==='GAME_OVER'){ drawBackground(); drawPlatforms(); drawGameOver(); if(In.restart()){ initAC(); G.world=1;G.level=1;G.score=0;G.lives=3;startLevel(); } return; }
+  if(G.screen==='GAME_OVER'){ drawBackground(); drawPlatforms(); drawGameOver(); if(In.restart()){ initAC(); if(G.mode==='RUSH'){ G.mode='CAMPAIGN'; G.screen='TITLE'; } else { G.world=1;G.level=1;G.score=0;G.lives=3;startLevel(); } } return; }
   // --- WIN ---
   if(G.screen==='WIN'){ drawWin(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.screen='TITLE'; } return; }
 
@@ -4463,7 +4725,7 @@ function loop(ts){
   if(G.screen==='LEVEL_CLEAR'){
     drawBackground(); drawPlatforms(); drawDecorations(); drawHUD(); drawLevelClear();
     levelClearTimer-=dt;
-    if(levelClearTimer<=0) nextLevel();
+    if(levelClearTimer<=0){ if(G.mode==='RUSH') rushNextFight(); else nextLevel(); }
     return;
   }
 
@@ -4485,7 +4747,10 @@ function loop(ts){
     } else {
       updatePhil(dt);
       updateEnemies(dt);
-      updateBoss(dt);
+      // Boss Rush difficulty ramp: run the boss on a faster clock as the run goes
+      // on. One call site speeds up movement, attack timers and recovery windows
+      // for all 12 bosses without touching any individual boss AI.
+      updateBoss(G.mode==='RUSH'?dt*rush.speed:dt);
       updateProjs(dt);
       updatePickups(dt);
       updateHazards(dt);
@@ -4551,9 +4816,9 @@ function loop(ts){
       facingR:phil.facingR, walkCycle:phil.walkCycle,
       attacking:phil.attacking, atkTimer:phil.atkTimer, atkDur:ATK_DUR,
       shielding:phil.shielding,
-      color:'#4ac8ff', swordColor:'#c8eeff',
+      color:skinDef().color, swordColor:skinDef().sword,
       invTimer:phil.invTimer, dead:phil.dead,
-      isPlayer:true, scale:1,
+      isPlayer:true, scale:1, skin:currentSkin,
     });
     ctx.restore();
   }

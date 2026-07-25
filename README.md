@@ -71,6 +71,27 @@ Mobile touch controls appear automatically on touch devices.
 - 🔵 **Blue flag** — Checkpoint (saves your respawn point, awards +100 score)
 - 🔴 **Red flag** — Level finish line
 
+### ⚔️ Boss Rush
+
+Pick **BOSS RUSH** on the title screen to skip the levels entirely and fight every boss in the game
+back to back — all 11 world and mini bosses in random order, with the Giant Stickman Mech always
+waiting as the finale. 12 fights, one run.
+
+- You start with 5 hearts and 3 lives for the **whole run**, and heal just **1 heart** between fights
+- Bosses get tougher the deeper you go — more health, and they move and attack faster
+- Every boss still starts in phase 1, so their full move sets and transformations play out as normal
+- Boss Rush keeps its own best score, separate from the campaign
+
+**Clear enough bosses and you unlock new skins for Phil:**
+
+| Bosses defeated | Skin unlocked |
+|---|---|
+| 4 | 🔴 **Mario** — red cap and blue overalls |
+| 8 | 🔵 **Sonica** — spiky quills and red shoes |
+| 12 (full clear) | 🟡 **Minion** — goggles and blue overalls |
+
+Unlocked skins are saved and can be selected from the title screen — they work in the main campaign too.
+
 ### Enemies
 - **Stickman Soldier** — Melee, patrols and chases Phil
 - **Stickman Archer** — Ranged, fires arrows that can be blocked with the shield
@@ -99,6 +120,7 @@ Mobile touch controls appear automatically on touch devices.
 - Sword + shield dual combat mechanic
 - Expanded enemy roster with shielded heavies, bomb lobbers, and diving gliders
 - 6 themed worlds with 13 boss fights, all using multi-phase AI
+- Boss Rush mode — all 12 bosses back to back, with a difficulty ramp and unlockable Phil skins
 - Parallax scrolling backgrounds
 - Web Audio API synthesized sound effects (no audio files)
 - Particle system for hits, dust, and deaths
