@@ -654,7 +654,7 @@ function applyRushScaling(){
 
 function rushBossCleared(){
   rush.cleared++;
-  phil.health=Math.min(5.0,phil.health+1.0);        // one heart back between fights
+  phil.health=Math.min(5.0,phil.health+1.5);        // heal between fights (playtested: 1.0 was a touch harsh)
   for(const id of SKIN_ORDER){
     const s=SKINS[id];
     if(s.unlockAt===rush.cleared && !unlockedSkins.has(id)){
@@ -3897,7 +3897,7 @@ function drawLevelClear(){
   ctx.fillStyle='#ffd700'; ctx.font='24px monospace'; ctx.fillText('Score: '+G.score,W/2,H/2+20);
   if(G.mode==='RUSH'){
     ctx.fillStyle='#ffbb55'; ctx.font='18px monospace';
-    ctx.fillText(`${rush.cleared} / ${RUSH_TOTAL} bosses defeated  •  +1 heart`,W/2,H/2+55);
+    ctx.fillText(`${rush.cleared} / ${RUSH_TOTAL} bosses defeated  •  +1.5 hearts`,W/2,H/2+55);
     const nxt=rush.queue[rush.idx+1];
     ctx.fillStyle='#aacccc'; ctx.font='16px monospace';
     ctx.fillText(nxt?'NEXT: '+getBossMeta(nxt).name:'Final boss down!',W/2,H/2+85);

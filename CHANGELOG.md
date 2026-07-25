@@ -4,7 +4,7 @@
 
 ### Added
 - Boss Rush mode — a shuffled run through all 11 world and mini bosses with the Giant Stickman Mech
-  always last. Health carries between fights (1 heart healed per boss), bosses scale up in health and
+  always last. Health carries between fights (1.5 hearts healed per boss), bosses scale up in health and
   speed as the run goes on, and clearing 4 / 8 / 12 bosses unlocks the Mario, Sonica and Minion skins
   for Phil. Selectable from a new title screen menu; unlocks and best score persist to localStorage
 - Title screen menu (Start Game / Boss Rush / Skin) with keyboard and tap support

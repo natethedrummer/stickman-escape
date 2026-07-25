@@ -77,7 +77,7 @@ Pick **BOSS RUSH** on the title screen to skip the levels entirely and fight eve
 back to back — all 11 world and mini bosses in random order, with the Giant Stickman Mech always
 waiting as the finale. 12 fights, one run.
 
-- You start with 5 hearts and 3 lives for the **whole run**, and heal just **1 heart** between fights
+- You start with 5 hearts and 3 lives for the **whole run**, and heal just **1.5 hearts** between fights
 - Bosses get tougher the deeper you go — more health, and they move and attack faster
 - Every boss still starts in phase 1, so their full move sets and transformations play out as normal
 - Boss Rush keeps its own best score, separate from the campaign
