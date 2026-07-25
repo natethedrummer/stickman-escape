@@ -19,6 +19,7 @@
 - ⚔️ **Sword + shield** dual combat — timing is everything
 - 💀 **5 enemy types**, from archers to bomb throwers to diving gliders
 - 📱 **Works everywhere** — desktop keyboard or mobile touch controls
+- 📖 **Comic cutscenes** — Phil's story told in hand-drawn canvas panels, skippable any time
 - 🔊 **Synthesized audio** — no sound files, all generated in-browser
 - 🏆 **High score** saved locally so you can beat yourself
 
@@ -43,6 +44,8 @@ Or download and open `index.html` in any modern browser (Chrome, Firefox, Safari
 | Sword Attack | `Z` or `J` |
 | Shield (hold) | `X`, `K`, or `Shift` |
 | Restart | `R` or `Enter` |
+| Cutscene — next panel | `Space`, `Enter`, `Z`, `→`, or click |
+| Cutscene — skip | `Escape` or the SKIP button |
 
 Mobile touch controls appear automatically on touch devices.
 

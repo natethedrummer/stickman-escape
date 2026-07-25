@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Story cutscenes drawn as canvas comic panels — an intro, one before each world boss, and an ending
+  sequence after the Giant Stickman Mech. Speech, thought and shout bubbles with typewriter text;
+  advance by click, tap or key; skippable with Escape or the on-screen SKIP button
 - Heavy Soldier enemy with a frontal shield block, 4-hit health pool, and a 50% health-drop chance
 - Bomb Thrower enemy that lobs destroyable arcing bombs with a small 1-heart blast radius
 - Stickman Glider enemy with patrol/chase/dive behavior and jump-attack-only sword vulnerability
