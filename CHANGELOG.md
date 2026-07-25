@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- Saved campaign progress — auto-saves world, level, score, lives and seen cutscenes at the start of
+  every level, with a CONTINUE option on the title screen. Versioned save format; malformed or
+  older-version saves are rejected rather than partially loaded. NEW GAME requires a second
+  confirmation before wiping an existing save, and finishing the campaign clears it
+  ([#28](https://github.com/natethedrummer/stickman-escape/issues/28))
+
+### Changed
+- Running out of lives now restarts the level you died on with 3 fresh lives and your score intact,
+  instead of throwing you back to World 1 Level 1
+
+### Added
 - Boss Rush mode — a shuffled run through all 11 world and mini bosses with the Giant Stickman Mech
   always last. Health carries between fights (1.5 hearts healed per boss), bosses scale up in health and
   speed as the run goes on, and clearing 4 / 8 / 12 bosses unlocks the Mario, Sonica and Minion skins

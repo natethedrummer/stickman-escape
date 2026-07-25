@@ -71,6 +71,17 @@ Mobile touch controls appear automatically on touch devices.
 - 🔵 **Blue flag** — Checkpoint (saves your respawn point, awards +100 score)
 - 🔴 **Red flag** — Level finish line
 
+### 💾 Saving
+
+Your campaign progress saves automatically at the start of every level — close the tab, come back
+whenever, and pick **CONTINUE** on the title screen to resume right where you left off.
+
+- Saves your world, level, score, lives and which cutscenes you've already watched
+- Running out of lives no longer sends you back to World 1 — you retry the level you died on, keeping your score
+- **NEW GAME** asks for a second confirmation before it wipes an existing save
+- Finishing the game clears the save so the next run starts fresh
+- Unlocked skins, the high score and your Boss Rush best are stored separately, so they survive a new game
+
 ### ⚔️ Boss Rush
 
 Pick **BOSS RUSH** on the title screen to skip the levels entirely and fight every boss in the game
@@ -125,6 +136,7 @@ Unlocked skins are saved and can be selected from the title screen — they work
 - Web Audio API synthesized sound effects (no audio files)
 - Particle system for hits, dust, and deaths
 - Mobile touch controls
+- Campaign progress auto-saved to localStorage with a Continue option on the title screen
 - High score saved to localStorage
 
 ---

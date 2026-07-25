@@ -490,6 +490,41 @@ function getBossType(world,level){
 let G = { screen:'TITLE', mode:'CAMPAIGN', world:1, level:1, score:0, highScore:+localStorage.getItem('pe_hs')||0, lives:3, seenCuts:{} };
 
 // ══════════════════════════════════════════════════════
+//  SAVED PROGRESS
+// ══════════════════════════════════════════════════════
+// Single campaign slot. Versioned so a future field change can invalidate old
+// saves cleanly instead of loading a half-understood object.
+const SAVE_KEY='pe_save', SAVE_VERSION=1;
+
+function readSave(){
+  try{
+    const s=JSON.parse(localStorage.getItem(SAVE_KEY));
+    if(!s||s.v!==SAVE_VERSION) return null;
+    // Progression is linear, so the stored position is also the furthest reached.
+    // Level 11 means the player had reached the final Mech fight.
+    if(!(s.world>=1&&s.world<=TOTAL_WORLDS)) return null;
+    if(!(s.level>=1&&s.level<=11)) return null;
+    return { v:s.v, world:s.world, level:s.level, score:+s.score||0,
+             lives:Math.max(1,Math.min(9,+s.lives||3)), seenCuts:s.seenCuts||{} };
+  }catch(e){ return null; }
+}
+function writeSave(){
+  if(G.mode!=='CAMPAIGN') return;             // Boss Rush never touches campaign progress
+  try{
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v:SAVE_VERSION, world:G.world, level:G.level,
+      score:G.score, lives:G.lives, seenCuts:G.seenCuts||{},
+    }));
+  }catch(e){}
+  saveState=readSave();
+}
+function clearSave(){
+  try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
+  saveState=null;
+}
+let saveState=readSave();
+
+// ══════════════════════════════════════════════════════
 //  SKINS  (unlocked by clearing bosses in Boss Rush)
 // ══════════════════════════════════════════════════════
 const SKINS = {
@@ -577,6 +612,7 @@ function spawnHazards(defs=[]){
 }
 
 function startLevel(){
+  writeSave();                    // auto-save at the start of every campaign level
   levelData = genLevel(G.world, G.level);
   enemies   = spawnEnemies(levelData.enemies);
   projs     = [];
@@ -727,6 +763,7 @@ function finishLevelCheatTransition(label){
   SFX.clear();
 }
 function startFinalBossLevel(){
+  writeSave();                    // level 11 in the save = "reached the final boss"
   G.screen='FINAL_BOSS_INTRO'; bossIntroTimer=3.5;
   levelData = genBossArena(TOTAL_WORLDS,10,makeRNG(TOTAL_WORLDS*100+10));
   levelData.worldW=1600;
@@ -1500,6 +1537,7 @@ function bossKilled(){
   } else if(boss.type==='mech'){
     setTimeout(()=>{
       if(G.score>G.highScore){G.highScore=G.score;localStorage.setItem('pe_hs',G.highScore);}
+      clearSave();                // campaign finished — next run starts fresh
       playCutscene('ending',()=>{ G.screen='WIN'; });
     },3200);
   } else {
@@ -3762,13 +3800,26 @@ function drawPickups(){
 
 // ── SCREEN OVERLAYS ──
 // ── TITLE MENU ──
-const TITLE_ITEMS=[
-  { id:'campaign', label:()=>'START GAME' },
-  { id:'rush',     label:()=>'BOSS RUSH' },
-  { id:'skin',     label:()=>'SKIN: '+skinDef().name },
-];
-let titleSelect=0, titleKeyHeld=false;
-function titleBox(i){ return { x:W/2-160, y:372+i*32, w:320, h:28 }; }
+// Built fresh each frame: CONTINUE only exists when there's a save, and NEW GAME
+// asks for a second confirmation before it wipes one.
+let titleSelect=0, titleKeyHeld=false, titleConfirm=false;
+
+function saveLabel(s){
+  return s.level>10 ? 'FINAL BOSS' : `${WORLDS[s.world].name} L${s.level}`;
+}
+function titleItems(){
+  const items=[];
+  if(saveState) items.push({ id:'continue', label:()=>'CONTINUE: '+saveLabel(saveState) });
+  items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
+                                       : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
+  items.push({ id:'rush', label:()=>'BOSS RUSH' });
+  items.push({ id:'skin', label:()=>'SKIN: '+skinDef().name });
+  return items;
+}
+function titleBox(i,count){
+  const n=count||titleItems().length;
+  return { x:W/2-160, y:(n>=4?356:372)+i*32, w:320, h:28 };
+}
 
 function cycleSkin(dir){
   const un=SKIN_ORDER.filter(s=>unlockedSkins.has(s));
@@ -3777,12 +3828,26 @@ function cycleSkin(dir){
   saveSkins(); SFX.pickup();
 }
 
+function startNewCampaign(){
+  clearSave();
+  G.mode='CAMPAIGN'; G.world=1;G.level=1;G.score=0;G.lives=3; G.seenCuts={};
+  playCutscene('intro',startLevel);
+}
+
 function titleActivate(){
   initAC();
-  const id=TITLE_ITEMS[titleSelect].id;
-  if(id==='campaign'){
-    G.mode='CAMPAIGN'; G.world=1;G.level=1;G.score=0;G.lives=3; G.seenCuts={};
-    playCutscene('intro',startLevel);
+  const items=titleItems();
+  const id=items[titleSelect].id;
+  if(id==='continue'){
+    const s=saveState;
+    G.mode='CAMPAIGN';
+    G.world=s.world; G.level=s.level; G.score=s.score; G.lives=s.lives; G.seenCuts=s.seenCuts;
+    if(s.level>10) startFinalBossLevel(); else startLevel();
+  } else if(id==='campaign'){
+    // Wiping an existing save takes two presses
+    if(saveState&&!titleConfirm){ titleConfirm=true; SFX.pickup(); return; }
+    titleConfirm=false;
+    startNewCampaign();
   } else if(id==='rush'){
     startRushRun();
   } else {
@@ -3791,24 +3856,29 @@ function titleActivate(){
 }
 
 function handleTitleInput(){
+  const items=titleItems();
+  if(titleSelect>=items.length) titleSelect=items.length-1;
   const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
   const left=keys['ArrowLeft']||keys['KeyA'], right=keys['ArrowRight']||keys['KeyD'];
   const go=keys['Enter']||keys['Space'];
   if(up||down||left||right||go){
     if(!titleKeyHeld){
       titleKeyHeld=true;
-      if(down)       titleSelect=(titleSelect+1)%TITLE_ITEMS.length;
-      else if(up)    titleSelect=(titleSelect+TITLE_ITEMS.length-1)%TITLE_ITEMS.length;
-      else if(left||right){ if(TITLE_ITEMS[titleSelect].id==='skin') cycleSkin(right?1:-1); }
+      if(down)       { titleSelect=(titleSelect+1)%items.length; titleConfirm=false; }
+      else if(up)    { titleSelect=(titleSelect+items.length-1)%items.length; titleConfirm=false; }
+      else if(left||right){ if(items[titleSelect].id==='skin') cycleSkin(right?1:-1); }
       else titleActivate();
     }
   } else titleKeyHeld=false;
   // Tap / click a menu row directly (this is how touch devices drive the menu)
   if(tapPoint){
-    for(let i=0;i<TITLE_ITEMS.length;i++){
-      if(cutInBox(tapPoint,titleBox(i))){ titleSelect=i; tapPoint=null; titleActivate(); return; }
+    for(let i=0;i<items.length;i++){
+      if(cutInBox(tapPoint,titleBox(i,items.length))){
+        if(titleSelect!==i){ titleSelect=i; titleConfirm=false; }
+        tapPoint=null; titleActivate(); return;
+      }
     }
-    tapPoint=null;
+    tapPoint=null; titleConfirm=false;
   }
 }
 
@@ -3829,36 +3899,44 @@ function drawTitle(){
   ctx.fillStyle='#aaccaa'; ctx.font='16px monospace';
   ctx.fillText('A Stickman Warrior fights for freedom',W/2,300);
   ctx.fillStyle='#667766'; ctx.font='12px monospace';
-  ctx.fillText('Forest  •  Desert  •  Snow Peaks  •  Factory 999  •  Mines  •  Berlin',W/2,330);
-  ctx.fillText('13 boss fights, then the final Stickman Mech showdown',W/2,352);
+  ctx.fillText('Forest  •  Desert  •  Snow Peaks  •  Factory 999  •  Mines  •  Berlin',W/2,326);
+  ctx.fillText('13 boss fights, then the final Stickman Mech showdown',W/2,344);
 
   // Menu
-  for(let i=0;i<TITLE_ITEMS.length;i++){
-    const b=titleBox(i), sel=(i===titleSelect);
-    ctx.fillStyle=sel?'rgba(60,110,30,0.55)':'rgba(0,0,0,0.3)';
+  const items=titleItems();
+  for(let i=0;i<items.length;i++){
+    const b=titleBox(i,items.length), sel=(i===titleSelect);
+    const warn=sel&&titleConfirm&&items[i].id==='campaign';
+    ctx.fillStyle=warn?'rgba(140,40,20,0.6)':sel?'rgba(60,110,30,0.55)':'rgba(0,0,0,0.3)';
     ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.strokeStyle=sel?'#aaff66':'#3a5a30'; ctx.lineWidth=2;
+    ctx.strokeStyle=warn?'#ff8844':sel?'#aaff66':'#3a5a30'; ctx.lineWidth=2;
     ctx.strokeRect(b.x,b.y,b.w,b.h);
-    ctx.fillStyle=sel?'#ffffff':'#8faa80'; ctx.font='bold 16px monospace';
-    ctx.fillText(TITLE_ITEMS[i].label(),W/2,b.y+19);
+    ctx.fillStyle=warn?'#ffddcc':sel?'#ffffff':'#8faa80'; ctx.font='bold 16px monospace';
+    ctx.fillText(items[i].label(),W/2,b.y+19);
     if(sel&&Math.sin(frameN*.12)>0){
-      ctx.fillStyle='#ffcc22'; ctx.font='bold 16px monospace';
+      ctx.fillStyle=warn?'#ff8844':'#ffcc22'; ctx.font='bold 16px monospace';
       ctx.fillText('>',b.x-16,b.y+19); ctx.fillText('<',b.x+b.w+16,b.y+19);
     }
+  }
+  const bottom=titleBox(items.length-1,items.length).y+28;
+  if(titleConfirm){
+    ctx.fillStyle='#ff9966'; ctx.font='12px monospace';
+    ctx.fillText('Press again to wipe your saved progress, or pick something else',W/2,bottom+18);
+  } else {
+    ctx.fillStyle='#556644'; ctx.font='12px monospace';
+    ctx.fillText('HIGH SCORE: '+G.highScore+(rush.best?'    BOSS RUSH BEST: '+rush.best:''),W/2,bottom+18);
   }
   // Locked skin hint
   const locked=SKIN_ORDER.filter(s=>!unlockedSkins.has(s));
   ctx.font='11px monospace';
   if(locked.length){
     ctx.fillStyle='#667a5a';
-    ctx.fillText('Locked skins: '+locked.map(s=>SKINS[s].name+' ('+SKINS[s].unlockAt+' bosses)').join('   '),W/2,505);
+    ctx.fillText('Locked skins: '+locked.map(s=>SKINS[s].name+' ('+SKINS[s].unlockAt+' bosses)').join('   '),W/2,bottom+36);
   } else {
-    ctx.fillStyle='#ccaa44'; ctx.fillText('★ ALL SKINS UNLOCKED ★',W/2,505);
+    ctx.fillStyle='#ccaa44'; ctx.fillText('★ ALL SKINS UNLOCKED ★',W/2,bottom+36);
   }
-  ctx.fillStyle='#556644'; ctx.font='12px monospace';
-  ctx.fillText('HIGH SCORE: '+G.highScore+(rush.best?'    BOSS RUSH BEST: '+rush.best:''),W/2,486);
   ctx.fillStyle='#445544'; ctx.font='11px monospace';
-  ctx.fillText(isTouchDevice?'Tap a menu option':'Arrows/WASD: Select   Enter: Choose',W/2,524);
+  ctx.fillText(isTouchDevice?'Tap a menu option':'Arrows/WASD: Select   Enter: Choose',W/2,bottom+54);
   ctx.textAlign='left';
 }
 
@@ -3932,6 +4010,11 @@ function drawGameOver(){
   ctx.fillText('CAPTURED!',W/2,H/2-70); ctx.shadowBlur=0;
   ctx.fillStyle='#bbaaaa'; ctx.font='18px monospace'; ctx.fillText('Phil used all his lives and was recaptured...',W/2,H/2-10);
   ctx.fillStyle='#ffd700'; ctx.font='20px monospace'; ctx.fillText('Score: '+G.score,W/2,H/2+35);
+  if(G.mode!=='RUSH'){
+    ctx.fillStyle='#88bb88'; ctx.font='15px monospace';
+    ctx.fillText(G.level>10?'Your progress is saved — retry the final boss':
+      `Your progress is saved — retry ${WORLDS[G.world].name} level ${G.level}`,W/2,H/2+62);
+  }
   if(Math.sin(frameN*.07)>0){ ctx.fillStyle='#ccaaff'; ctx.font='bold 18px monospace'; ctx.fillText(isTouchDevice?'TAP TO TRY AGAIN':'PRESS R OR ENTER TO TRY AGAIN',W/2,H/2+85); }
   ctx.textAlign='left';
 }
@@ -4707,7 +4790,7 @@ function loop(ts){
   // --- CUTSCENE ---
   if(G.screen==='CUTSCENE'){ updateCutscene(dt); if(cutscene) drawCutscene(); return; }
   // --- GAME OVER ---
-  if(G.screen==='GAME_OVER'){ drawBackground(); drawPlatforms(); drawGameOver(); if(In.restart()){ initAC(); if(G.mode==='RUSH'){ G.mode='CAMPAIGN'; G.screen='TITLE'; } else { G.world=1;G.level=1;G.score=0;G.lives=3;startLevel(); } } return; }
+  if(G.screen==='GAME_OVER'){ drawBackground(); drawPlatforms(); drawGameOver(); if(In.restart()){ initAC(); if(G.mode==='RUSH'){ G.mode='CAMPAIGN'; G.screen='TITLE'; } else { G.lives=3; startLevel(); } } return; }
   // --- WIN ---
   if(G.screen==='WIN'){ drawWin(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.screen='TITLE'; } return; }
 
