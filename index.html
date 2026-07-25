@@ -178,8 +178,16 @@ const GRAV=1600, MAX_FALL=900;
 function overlap(a,b){ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y; }
 function moveCollide(e, plats, dt){
   e.wasOnGround=e.onGround; e.onGround=false;
+  const x0=e.x, preBox={x:x0,y:e.y,w:e.w,h:e.h};
   e.x+=e.vx*dt;
   for(const p of plats){ if(overlap(e,p)){
+    // Only resolve overlaps this horizontal step actually created. An entity that
+    // started the frame already embedded in a platform (spawned a few px too low,
+    // say) would otherwise get shoved out by the shortest horizontal distance —
+    // which for a wide floor means launching it clean out of the level, where it
+    // falls forever. Leave those to the vertical pass below, which lifts it out
+    // the short way instead.
+    if(overlap(preBox,p)) continue;
     const pL=(e.x+e.w)-p.x, pR=(p.x+p.w)-e.x;
     if(pL<pR){e.x-=pL;if(e.vx>0)e.vx=0;}else{e.x+=pR;if(e.vx<0)e.vx=0;}
   }}
