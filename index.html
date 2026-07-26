@@ -743,7 +743,9 @@ function readSave(){
   try{
     const s=JSON.parse(localStorage.getItem(SAVE_KEY));
     if(!s||s.v!==SAVE_VERSION) return null;
-    // Progression is linear, so the stored position is also the furthest reached.
+    // Where the player currently is, which since the world map exists is NOT
+    // necessarily the furthest they've reached — picking an earlier level to
+    // replay moves this back. `pe_progress` is the record of furthest reached.
     // Level 11 means the player had reached the final Mech fight.
     if(!(s.world>=1&&s.world<=TOTAL_WORLDS)) return null;
     if(!(s.level>=1&&s.level<=11)) return null;
@@ -766,6 +768,56 @@ function clearSave(){
   saveState=null;
 }
 let saveState=readSave();
+
+// ══════════════════════════════════════════════════════
+//  MAP PROGRESS
+// ══════════════════════════════════════════════════════
+// Deliberately separate from the campaign save. `pe_save` is one resumable run
+// and gets wiped by NEW GAME and by finishing the game; unlocked levels and best
+// scores should survive both — beating the campaign must not re-lock the map.
+// Keeping it apart also means the save format never had to change, so an
+// in-progress run from an older build keeps working untouched.
+const PROG_KEY='pe_progress';
+const posRank=(w,l)=>w*100+l;
+
+function loadProgress(){
+  try{
+    const p=JSON.parse(localStorage.getItem(PROG_KEY));
+    if(p&&p.w>=1&&p.w<=TOTAL_WORLDS&&p.l>=1&&p.l<=11){
+      const best={};
+      if(p.best&&typeof p.best==='object'){
+        for(const k of Object.keys(p.best)){ const n=+p.best[k]; if(n>0) best[k]=n; }
+      }
+      return { w:p.w, l:p.l, best };
+    }
+  }catch(e){}
+  // First run on a build that has the map: seed from however far the existing
+  // campaign save had got, so nobody loses access to levels they already beat.
+  return { w:saveState?saveState.world:1, l:saveState?saveState.level:1, best:{} };
+}
+let progress=loadProgress();
+
+function saveProgress(){
+  try{ localStorage.setItem(PROG_KEY, JSON.stringify(progress)); }catch(e){}
+}
+function markReached(w,l){
+  if(posRank(w,l)>posRank(progress.w,progress.l)){ progress.w=w; progress.l=l; saveProgress(); }
+}
+function recordBest(w,l,pts){
+  const k=w+'-'+l;
+  if(pts>0&&pts>(progress.best[k]||0)){ progress.best[k]=pts; saveProgress(); }
+}
+function bestFor(w,l){ return progress.best[w+'-'+l]||0; }
+function levelUnlocked(w,l){ return posRank(w,l)<=posRank(progress.w,progress.l); }
+function levelCleared(w,l){ return posRank(w,l)<posRank(progress.w,progress.l); }
+function levelsInWorld(w){ return w===TOTAL_WORLDS?11:10; }   // world 6 carries the final Mech node
+function totalLevels(){ return (TOTAL_WORLDS-1)*10+11; }
+function clearedCount(){
+  let n=0;
+  for(let w=1;w<=TOTAL_WORLDS;w++)
+    for(let l=1;l<=levelsInWorld(w);l++) if(levelCleared(w,l)) n++;
+  return n;
+}
 
 // ══════════════════════════════════════════════════════
 //  SKINS  (unlocked by clearing bosses in Boss Rush)
@@ -857,6 +909,7 @@ let bossIntroTimer = 0, levelClearTimer = 0, deathTimer = 0;
 let hasKey = false;                 // picked up the secret key on this level
 let secretRun = null;               // {theme, world, returnLevel} while inside a secret level
 let secretIntroTimer = 0, secretAward = 0, secretGolden = false;
+let levelStartScore = 0;            // score when the level began; the map shows the difference
 const BOUNCE_V = -520;              // launch speed off every landing in the springs stage
 let mechFinalTriggered = false;
 let paused = false, pauseSelect = 0, pauseKeyHeld = false;
@@ -927,6 +980,8 @@ function spawnHazards(defs=[]){
 
 function startLevel(){
   writeSave();                    // auto-save at the start of every campaign level
+  if(G.mode==='CAMPAIGN') markReached(G.world,G.level);
+  levelStartScore=G.score;
   secretRun=null; gravMul=1; hasKey=false;   // never inherit secret-level rules
   levelData = genLevel(G.world, G.level);
   enemies   = spawnEnemies(levelData.enemies);
@@ -997,6 +1052,8 @@ function leaveSecret(){
   const ret=secretRun;
   secretRun=null; gravMul=1;
   G.world=ret.world; G.level=ret.returnLevel;
+  // Leaving through the door clears that campaign level, so it earns a best too
+  recordBest(ret.world,ret.returnLevel,G.score-levelStartScore);
   nextLevel();                    // the door counted as clearing that level
 }
 
@@ -1125,6 +1182,8 @@ function finishLevelCheatTransition(label){
 }
 function startFinalBossLevel(){
   writeSave();                    // level 11 in the save = "reached the final boss"
+  markReached(TOTAL_WORLDS,11);
+  levelStartScore=G.score;
   G.screen='FINAL_BOSS_INTRO'; bossIntroTimer=3.5;
   levelData = genBossArena(TOTAL_WORLDS,10,makeRNG(TOTAL_WORLDS*100+10));
   levelData.worldW=1600;
@@ -1401,6 +1460,9 @@ function respawnPhil(){
 
 function levelComplete(){
   addScore(500); SFX.clear();
+  // Points earned in this level, not the running campaign total — that's the only
+  // figure that means anything when you replay a level from the map.
+  if(G.mode==='CAMPAIGN') recordBest(G.world,G.level,G.score-levelStartScore);
   G.lives=3; phil.health=5.0;
   burst(levelData.flagX,levelData.flagY-20,'#ff3322',16,120,0);
   G.screen='LEVEL_CLEAR'; levelClearTimer=2.5;
@@ -4534,6 +4596,230 @@ function drawPickups(){
 }
 
 // ── SCREEN OVERLAYS ──
+// ══════════════════════════════════════════════════════
+//  WORLD MAP
+// ══════════════════════════════════════════════════════
+// One world on screen at a time rather than all 60 nodes at once — at this canvas
+// size a full overworld leaves ~16px per node with nowhere to put a label, and
+// per-world paging is what lets more worlds be added later without a redesign.
+let mapW=1, mapL=1, mapKeyHeld=false;
+let mapPhil={ x:0, y:0, walk:0, dir:1 };
+
+function mapNodePos(i,total){
+  const span=W-190;
+  return { x:95+(total<2?0:i*span/(total-1)), y:284+Math.sin(i*0.86+0.4)*62 };
+}
+function mapNodeAt(w,l){ return mapNodePos(l-1,levelsInWorld(w)); }
+function isBossNode(w,l){ return l===5||l===10||l===11; }
+
+function mapLevelName(w,l){
+  if(l===11) return 'THE FINAL MECH';
+  const bt=WORLD_BOSS_MAP[w]&&WORLD_BOSS_MAP[w][l];
+  return bt ? getBossMeta(bt).name.toUpperCase() : 'LEVEL '+l;
+}
+
+function openMap(){
+  initAC();
+  mapW=progress.w; mapL=Math.min(progress.l,levelsInWorld(mapW));
+  // The map drives the live campaign run, so pick up the saved score and lives
+  // rather than starting whichever level is chosen from nothing.
+  G.mode='CAMPAIGN';
+  if(saveState){ G.score=saveState.score; G.lives=saveState.lives; G.seenCuts=saveState.seenCuts; }
+  else { G.score=0; G.lives=3; G.seenCuts={}; }
+  const n=mapNodeAt(mapW,mapL); mapPhil.x=n.x; mapPhil.y=n.y; mapPhil.walk=0;
+  // The key that opened the map is still down this frame. Without this the map
+  // reads it as its own press and launches whatever level is selected instantly.
+  mapKeyHeld=true;
+  G.screen='MAP';
+}
+
+function mapPlay(){
+  if(!levelUnlocked(mapW,mapL)){ SFX.block(); return; }
+  initAC();
+  G.mode='CAMPAIGN'; G.world=mapW; G.level=mapL;
+  if(mapL>10) startFinalBossLevel(); else startLevel();
+}
+
+function mapStep(d){
+  let l=mapL+d;
+  if(l<1){ if(mapW>1){ mapW--; l=levelsInWorld(mapW); } else return; }
+  else if(l>levelsInWorld(mapW)){ if(mapW<TOTAL_WORLDS){ mapW++; l=1; } else return; }
+  mapL=l; SFX.pickup();
+}
+function mapWorldStep(d){
+  const w=Math.max(1,Math.min(TOTAL_WORLDS,mapW+d));
+  if(w===mapW) return;
+  mapW=w; mapL=Math.min(mapL,levelsInWorld(w)); SFX.pickup();
+}
+
+function updateMap(dt){
+  const t=mapNodeAt(mapW,mapL);
+  const dx=t.x-mapPhil.x, dy=t.y-mapPhil.y;
+  const dist=Math.hypot(dx,dy);
+  if(dist>1){
+    const step=Math.min(dist,420*dt);
+    mapPhil.x+=dx/dist*step; mapPhil.y+=dy/dist*step;
+    mapPhil.walk+=dt*11;
+    if(Math.abs(dx)>1) mapPhil.dir=dx>0?1:-1;
+  }
+}
+
+function handleMapInput(){
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const left=keys['ArrowLeft']||keys['KeyA'], right=keys['ArrowRight']||keys['KeyD'];
+  const go=keys['Enter']||keys['Space'], back=keys['Escape'];
+  if(up||down||left||right||go||back){
+    if(!mapKeyHeld){
+      mapKeyHeld=true;
+      if(back){ G.screen='TITLE'; titleKeyHeld=true; SFX.pickup(); }   // same guard going back
+      else if(go) mapPlay();
+      else if(left) mapStep(-1);
+      else if(right) mapStep(1);
+      else if(up) mapWorldStep(-1);
+      else if(down) mapWorldStep(1);
+    }
+  } else mapKeyHeld=false;
+
+  if(tapPoint){
+    const total=levelsInWorld(mapW);
+    for(let i=0;i<total;i++){
+      const p=mapNodePos(i,total);
+      if(Math.hypot(tapPoint.x-p.x,tapPoint.y-p.y)<26){
+        const l=i+1;
+        // First tap selects, a second tap on the same node plays it
+        if(mapL===l) { tapPoint=null; mapPlay(); return; }
+        mapL=l; SFX.pickup(); tapPoint=null; return;
+      }
+    }
+    // Tap the world arrows
+    if(tapPoint.y<70){
+      if(tapPoint.x<W*0.25) mapWorldStep(-1);
+      else if(tapPoint.x>W*0.75) mapWorldStep(1);
+    }
+    tapPoint=null;
+  }
+}
+
+function drawMapNode(w,l,p,sel){
+  const wd=WORLDS[w];
+  const unlocked=levelUnlocked(w,l), cleared=levelCleared(w,l), boss=isBossNode(w,l);
+  const r=l===11?21:(boss?17:12);
+
+  if(sel){
+    ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
+    ctx.globalAlpha=0.5+Math.sin(frameN*0.11)*0.3;
+    ctx.beginPath(); ctx.arc(p.x,p.y,r+9,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
+  ctx.fillStyle=!unlocked?'#23252c':(cleared?wd.platTop:wd.platFill);
+  ctx.fill();
+  ctx.lineWidth=2.5;
+  ctx.strokeStyle=!unlocked?'#3d4049':(l===11?'#ffc832':(boss?'#ff6a5a':'#ffffff'));
+  ctx.stroke();
+
+  if(!unlocked){
+    // Padlock
+    ctx.strokeStyle='#6b7078'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(p.x,p.y-2,4,Math.PI,0); ctx.stroke();
+    ctx.fillStyle='#6b7078'; ctx.fillRect(p.x-5,p.y-2,10,8);
+  } else if(boss){
+    // Skull: two sockets and a jaw
+    ctx.fillStyle=cleared?'#2b1d1d':'#ffffff';
+    ctx.beginPath(); ctx.arc(p.x-4.5,p.y-2,2.6,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x+4.5,p.y-2,2.6,0,Math.PI*2); ctx.fill();
+    ctx.fillRect(p.x-4,p.y+3,8,4);
+  } else if(cleared){
+    starPath(p.x,p.y,7,3,0);
+    ctx.fillStyle='#ffe14d'; ctx.fill();
+  } else {
+    ctx.fillStyle='#ffffff'; ctx.font='bold 11px monospace';
+    ctx.textAlign='center'; ctx.fillText(String(l),p.x,p.y+4);
+  }
+
+  // Secrets are only revealed once found — the map must not spoil the hunt.
+  // Sits below the node: Phil stands on top of the selected one and would hide it.
+  if(SECRET_LEVEL[w]===l&&secretsFound.has(w)){
+    ctx.fillStyle='#ffd54a'; ctx.font='bold 13px monospace'; ctx.textAlign='center';
+    ctx.fillText('⚷',p.x,p.y+r+14);
+  }
+  ctx.textAlign='left';
+}
+
+function drawMapPanel(){
+  const unlocked=levelUnlocked(mapW,mapL), cleared=levelCleared(mapW,mapL);
+  const best=bestFor(mapW,mapL);
+  const px=60, py=H-104, pw=W-120, ph=74;
+  ctx.fillStyle='rgba(6,10,16,0.82)'; ctx.fillRect(px,py,pw,ph);
+  ctx.strokeStyle=unlocked?'#7f9c62':'#454a54'; ctx.lineWidth=2; ctx.strokeRect(px,py,pw,ph);
+
+  ctx.textAlign='left';
+  ctx.fillStyle=unlocked?'#ffffff':'#7a8089'; ctx.font='bold 17px monospace';
+  ctx.fillText(mapLevelName(mapW,mapL),px+16,py+26);
+
+  ctx.font='12px monospace';
+  if(!unlocked){
+    ctx.fillStyle='#8a9099';
+    ctx.fillText('LOCKED — reach it by playing through the campaign',px+16,py+48);
+  } else {
+    ctx.fillStyle='#9fd07a';
+    ctx.fillText(cleared?'CLEARED':'NOT CLEARED YET',px+16,py+48);
+    ctx.fillStyle='#c8cf9a';
+    ctx.fillText(best?('BEST: '+best+' pts'):'BEST: —',px+150,py+48);
+    if(SECRET_LEVEL[mapW]===mapL&&secretsFound.has(mapW)){
+      ctx.fillStyle='#ffd54a';
+      ctx.fillText('⚷ SECRET FOUND HERE',px+300,py+48);
+    }
+  }
+  ctx.textAlign='right';
+  ctx.fillStyle=unlocked?'#ffcc22':'#5c626b'; ctx.font='bold 13px monospace';
+  ctx.fillText(isTouchDevice?(unlocked?'TAP AGAIN TO PLAY':'LOCKED'):(unlocked?'ENTER: PLAY':'LOCKED'),px+pw-16,py+26);
+  ctx.fillStyle='#7f8892'; ctx.font='11px monospace';
+  ctx.fillText(isTouchDevice?'Tap a level  •  Tap the top corners to change world'
+                            :'←/→ level   ↑/↓ world   ESC back',px+pw-16,py+48);
+  ctx.textAlign='left';
+}
+
+function drawMap(){
+  const wd=WORLDS[mapW];
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,wd.skyT); g.addColorStop(1,wd.skyB);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillRect(0,0,W,H);
+
+  // Header
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(0,0,W,64);
+  ctx.fillStyle='#ffffff'; ctx.font='bold 24px monospace';
+  ctx.fillText(`WORLD ${mapW} — ${wd.name}`,W/2,32);
+  ctx.fillStyle='#b9c2ad'; ctx.font='11px monospace';
+  ctx.fillText(`${clearedCount()} of ${totalLevels()} levels cleared`,W/2,52);
+  if(mapW>1){ ctx.fillStyle='#ffcc22'; ctx.font='bold 18px monospace'; ctx.fillText('▲ '+WORLDS[mapW-1].name,W*0.16,34); }
+  if(mapW<TOTAL_WORLDS){ ctx.fillStyle='#ffcc22'; ctx.font='bold 18px monospace'; ctx.fillText('▼ '+WORLDS[mapW+1].name,W*0.84,34); }
+  ctx.textAlign='left';
+
+  // Path
+  const total=levelsInWorld(mapW);
+  ctx.strokeStyle='rgba(255,255,255,0.32)'; ctx.lineWidth=4;
+  ctx.setLineDash([2,11]); ctx.lineCap='round';
+  ctx.beginPath();
+  for(let i=0;i<total;i++){ const p=mapNodePos(i,total); i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y); }
+  ctx.stroke();
+  ctx.setLineDash([]); ctx.lineCap='butt';
+
+  for(let i=0;i<total;i++) drawMapNode(mapW,i+1,mapNodePos(i,total),i+1===mapL);
+
+  // Phil walks the path as you move along it
+  drawStickman(mapPhil.x-11,mapPhil.y-56,22,44,{
+    facingR:mapPhil.dir>0, walkCycle:mapPhil.walk, attacking:false, atkTimer:0, atkDur:1,
+    shielding:false, color:skinDef().color, swordColor:skinDef().sword,
+    invTimer:0, dead:false, isPlayer:true, scale:0.85, skin:currentSkin,
+  });
+
+  drawMapPanel();
+}
+
 // ── TITLE MENU ──
 // Built fresh each frame: CONTINUE only exists when there's a save, and NEW GAME
 // asks for a second confirmation before it wipes one.
@@ -4545,6 +4831,7 @@ function saveLabel(s){
 function titleItems(){
   const items=[];
   if(saveState) items.push({ id:'continue', label:()=>'CONTINUE: '+saveLabel(saveState) });
+  items.push({ id:'map', label:()=>'WORLD MAP' });
   items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
   items.push({ id:'rush', label:()=>'BOSS RUSH' });
@@ -4553,7 +4840,10 @@ function titleItems(){
 }
 function titleBox(i,count){
   const n=count||titleItems().length;
-  return { x:W/2-160, y:(n>=4?356:372)+i*32, w:320, h:28 };
+  // Tightens up as rows are added, so the footer never runs off the canvas
+  const gap=n>=5?28:32, h=n>=5?26:28;
+  const top=n>=5?344:(n>=4?356:372);
+  return { x:W/2-160, y:top+i*gap, w:320, h };
 }
 
 function cycleSkin(dir){
@@ -4583,6 +4873,8 @@ function titleActivate(){
     if(saveState&&!titleConfirm){ titleConfirm=true; SFX.pickup(); return; }
     titleConfirm=false;
     startNewCampaign();
+  } else if(id==='map'){
+    openMap();
   } else if(id==='rush'){
     startRushRun();
   } else {
@@ -4635,10 +4927,11 @@ function drawTitle(){
   ctx.fillText('A Stickman Warrior fights for freedom',W/2,300);
   ctx.fillStyle='#667766'; ctx.font='12px monospace';
   ctx.fillText('Forest  •  Desert  •  Snow Peaks  •  Factory 999  •  Mines  •  Berlin',W/2,326);
-  ctx.fillText('13 boss fights, then the final Stickman Mech showdown',W/2,344);
 
   // Menu
   const items=titleItems();
+  // The tagline is the first thing to go when a fifth row needs the space
+  if(items.length<5) ctx.fillText('13 boss fights, then the final Stickman Mech showdown',W/2,344);
   for(let i=0;i<items.length;i++){
     const b=titleBox(i,items.length), sel=(i===titleSelect);
     const warn=sel&&titleConfirm&&items[i].id==='campaign';
@@ -4658,8 +4951,10 @@ function drawTitle(){
     ctx.fillStyle='#ff9966'; ctx.font='12px monospace';
     ctx.fillText('Press again to wipe your saved progress, or pick something else',W/2,bottom+16);
   } else {
+    // Secret count rides along here; the map panel carries the per-level detail
     ctx.fillStyle='#556644'; ctx.font='12px monospace';
-    ctx.fillText('HIGH SCORE: '+G.highScore+(rush.best?'    BOSS RUSH BEST: '+rush.best:''),W/2,bottom+16);
+    ctx.fillText('HIGH SCORE: '+G.highScore+(rush.best?'   RUSH BEST: '+rush.best:'')+
+      '   SECRETS: '+secretsFound.size+'/'+SECRET_TOTAL,W/2,bottom+16);
   }
   // Locked skin hint
   const locked=SKIN_ORDER.filter(s=>!unlockedSkins.has(s));
@@ -4667,21 +4962,12 @@ function drawTitle(){
   if(locked.length){
     ctx.fillStyle='#667a5a';
     ctx.fillText('Locked skins: '+locked.map(s=>SKINS[s].name+
-      (SKINS[s].secret?' (all secrets)':' ('+SKINS[s].unlockAt+' bosses)')).join('   '),W/2,bottom+30);
+      (SKINS[s].secret?' (all secrets)':' ('+SKINS[s].unlockAt+' bosses)')).join('   '),W/2,bottom+32);
   } else {
-    ctx.fillStyle='#ccaa44'; ctx.fillText('★ ALL SKINS UNLOCKED ★',W/2,bottom+30);
-  }
-  // Secret progress
-  ctx.font='11px monospace';
-  if(secretsFound.size>=SECRET_TOTAL){
-    ctx.fillStyle='#ccaa44'; ctx.fillText('★ ALL '+SECRET_TOTAL+' SECRET AREAS FOUND ★',W/2,bottom+44);
-  } else {
-    ctx.fillStyle='#667a5a';
-    ctx.fillText('Secret areas found: '+secretsFound.size+' / '+SECRET_TOTAL+
-      '   (one hidden in every world)',W/2,bottom+44);
+    ctx.fillStyle='#ccaa44'; ctx.fillText('★ ALL SKINS UNLOCKED ★',W/2,bottom+32);
   }
   ctx.fillStyle='#445544'; ctx.font='11px monospace';
-  ctx.fillText(isTouchDevice?'Tap a menu option':'Arrows/WASD: Select   Enter: Choose',W/2,bottom+56);
+  ctx.fillText(isTouchDevice?'Tap a menu option':'Arrows/WASD: Select   Enter: Choose',W/2,bottom+48);
   ctx.textAlign='left';
 }
 
@@ -4782,7 +5068,7 @@ function drawWin(){
 // ══════════════════════════════════════════════════════
 //  PAUSE MENU
 // ══════════════════════════════════════════════════════
-const PAUSE_ITEMS = ['RESUME','RESTART LEVEL','QUIT TO TITLE'];
+const PAUSE_ITEMS = ['RESUME','RESTART LEVEL','WORLD MAP','QUIT TO TITLE'];
 function drawPauseMenu(){
   ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center';
@@ -5530,6 +5816,7 @@ function loop(ts){
 
   // --- TITLE ---
   if(G.screen==='TITLE'){ drawTitle(); handleTitleInput(); return; }
+  if(G.screen==='MAP'){ updateMap(dt); drawMap(); handleMapInput(); return; }
   // --- BOSS RUSH COMPLETE ---
   if(G.screen==='RUSH_COMPLETE'){ drawRushComplete(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.mode='CAMPAIGN'; G.screen='TITLE'; } return; }
   // --- CUTSCENE ---
@@ -5587,7 +5874,8 @@ function loop(ts){
         keys['Enter']=false; keys['Space']=false;
         if(pauseSelect===0){ paused=false; }
         else if(pauseSelect===1){ paused=false; G.lives=3; startLevel(); }
-        else if(pauseSelect===2){ paused=false; G.screen='TITLE'; }
+        else if(pauseSelect===2){ paused=false; openMap(); }
+        else if(pauseSelect===3){ paused=false; G.screen='TITLE'; }
       }
     } else {
       updatePlatforms(dt);   // must lead: riders are carried before they move themselves

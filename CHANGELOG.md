@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- World map and level select — a canvas-drawn overworld reached from the title screen and the pause
+  menu. One world at a time, its levels laid out as stepping stones along a winding path, with Phil
+  walking to whichever node you select. Cleared levels show a star, boss levels a skull, locked ones
+  a padlock, and the final Mech its own gold node at the end of Berlin. A panel shows the level or
+  boss name, whether it's cleared, your best score for it, and whether you've found its secret;
+  worlds page with up/down and levels with left/right. Unlocked levels and per-level bests live in
+  their own `pe_progress` store, so they survive both NEW GAME and finishing the campaign
+  ([#14](https://github.com/natethedrummer/stickman-escape/issues/14))
 - Secret bonus levels — one hidden stage per world. A key is stashed on the highest platform of a set
   level in each world; carrying it to the door beside that level's finish flag opens the secret instead
   of the normal exit. Three themes: **The Dark** (a lantern is all Phil can see by), **Low Gravity**
