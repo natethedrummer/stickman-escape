@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- Secret bonus levels — one hidden stage per world. A key is stashed on the highest platform of a set
+  level in each world; carrying it to the door beside that level's finish flag opens the secret instead
+  of the normal exit. Three themes: **The Dark** (a lantern is all Phil can see by), **Low Gravity**
+  (gaps too wide to clear under normal gravity), and **The Springs** (every landing throws Phil back
+  up a zig-zag climb). Worth 2,500 points the first time and 500 on a replay; finding all six unlocks
+  the Golden Phil skin. Progress persists to localStorage, and running out of lives inside a secret
+  returns you to the campaign level that hides it
+  ([#26](https://github.com/natethedrummer/stickman-escape/issues/26))
 - Moving platforms — horizontal sliders, vertical elevators, and platforms that shake and drop away a
   moment after Phil lands on them (restored when he respawns). Anything standing on one is carried
   with it, enemies included, and each kind is marked so it reads as a mover before you jump: travel
