@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- Collectible power-ups — 2–3 per level on floating platforms, seeded so a level always rolls the
+  same set. Invincibility star (5s, blocks even saws and lava, with a gold aura distinct from the
+  spawn-invincibility flicker), speed boost (8s, faster run and higher jump with motion streaks) and
+  score ×2 (10s). Each shows a draining timer bar in the HUD, and picking one up again refreshes its
+  duration instead of stacking. Enemy heart drops now stay on the ground when Phil is at full health
+  ([#32](https://github.com/natethedrummer/stickman-escape/issues/32))
+
+### Added
 - Saved campaign progress — auto-saves world, level, score, lives and seen cutscenes at the start of
   every level, with a CONTINUE option on the title screen. Versioned save format; malformed or
   older-version saves are rejected rather than partially loaded. NEW GAME requires a second
