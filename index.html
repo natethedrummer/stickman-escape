@@ -2527,6 +2527,20 @@ function updateCam(dt){
 const STAR_POS = Array.from({length:120},(_,i)=>({x:Math.sin(i*7.3)*.5+.5,y:Math.sin(i*13.7)*.5+.5,r:.5+(i%3)*.5}));
 const TREE_POS_FAR  = Array.from({length:25},(_,i)=>({x:i*200+80,scale:.5+Math.sin(i*3.7)*.2}));
 const TREE_POS_NEAR = Array.from({length:20},(_,i)=>({x:i*250+130,scale:.7+Math.sin(i*2.9)*.25}));
+const BIRD_POS = Array.from({length:10},(_,i)=>({
+  x: i*197+40,
+  y: 46+((i*71)%128),
+  scale: .85+((i*29)%70)/100,
+  speed: .22+((i*17)%36)/100,
+  phase: i*1.9
+}));
+// Birds only fly in worlds that have an open sky — not the factory smog or underground mines.
+const BIRD_SKIES = {
+  forest: { tint:'rgba(18,34,22,0.72)',   count:8 },
+  desert: { tint:'rgba(86,44,12,0.72)',   count:6 },
+  snow:   { tint:'rgba(74,94,128,0.72)',  count:5 },
+  berlin: { tint:'rgba(12,18,34,0.72)',   count:4 },
+};
 
 function drawPineTree(x,y,scale,col){
   ctx.fillStyle=col;
@@ -2647,12 +2661,38 @@ function drawAntenna(x,y,scale,col){
   ctx.fillRect(x-4*scale,y-18*scale,8*scale,3*scale);
 }
 
+function drawBird(x,y,scale,flap){
+  const span=11*scale, lift=flap*7*scale;
+  ctx.beginPath();
+  ctx.moveTo(x-span,y);
+  ctx.quadraticCurveTo(x-span*.5,y-lift,x,y);
+  ctx.quadraticCurveTo(x+span*.5,y-lift,x+span,y);
+  ctx.lineWidth=Math.max(1.4,2.2*scale);
+  ctx.stroke();
+}
+
+function drawBirds(bg){
+  ctx.strokeStyle=bg.tint; ctx.lineCap='round';
+  const wrap=W+150;
+  for(let i=0;i<bg.count;i++){
+    const b=BIRD_POS[i];
+    const bx=((b.x+frameN*b.speed-cam.x*.06)%wrap+wrap)%wrap-75;
+    const by=b.y+Math.sin(frameN*.02+b.phase)*5;
+    drawBird(bx,by,b.scale,Math.sin(frameN*.14+b.phase));
+  }
+  ctx.lineCap='butt';
+}
+
 function drawBackground(){
   const w=WORLDS[G.world];
   // Sky gradient
   const gr=ctx.createLinearGradient(0,0,0,H);
   gr.addColorStop(0,w.skyT); gr.addColorStop(1,w.skyB);
   ctx.fillStyle=gr; ctx.fillRect(0,0,W,H);
+
+  // Birds drift across the sky behind the scenery
+  const birdSky=BIRD_SKIES[w.bgName];
+  if(birdSky) drawBirds(birdSky);
 
   if(w.bgName==='forest'){
     // Stars
