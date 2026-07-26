@@ -181,9 +181,12 @@ const GRAV=1600, MAX_FALL=900;
 function overlap(a,b){ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y; }
 function moveCollide(e, plats, dt){
   e.wasOnGround=e.onGround; e.onGround=false;
+  // Which platform the entity ends the frame standing on. updatePlatforms() reads
+  // this next frame to carry riders along with a moving platform.
+  e.rideP=null;
   const x0=e.x, preBox={x:x0,y:e.y,w:e.w,h:e.h};
   e.x+=e.vx*dt;
-  for(const p of plats){ if(overlap(e,p)){
+  for(const p of plats){ if(p.gone) continue; if(overlap(e,p)){
     // Only resolve overlaps this horizontal step actually created. An entity that
     // started the frame already embedded in a platform (spawned a few px too low,
     // say) would otherwise get shoved out by the shortest horizontal distance —
@@ -195,11 +198,86 @@ function moveCollide(e, plats, dt){
     if(pL<pR){e.x-=pL;if(e.vx>0)e.vx=0;}else{e.x+=pR;if(e.vx<0)e.vx=0;}
   }}
   e.vy=Math.min(e.vy+GRAV*dt,MAX_FALL); e.y+=e.vy*dt;
-  for(const p of plats){ if(overlap(e,p)){
+  for(const p of plats){ if(p.gone) continue; if(overlap(e,p)){
     const pU=(e.y+e.h)-p.y, pD=(p.y+p.h)-e.y;
-    if(pU<pD){e.y-=pU;if(e.vy>0){e.vy=0;e.onGround=true;}}
+    if(pU<pD){e.y-=pU;e.rideP=p;if(e.vy>0){e.vy=0;e.onGround=true;}}
     else{e.y+=pD;if(e.vy<0)e.vy=0;}
   }}
+}
+
+// ══════════════════════════════════════════════════════
+//  MOVING PLATFORMS
+// ══════════════════════════════════════════════════════
+// Movers live in the same `plats` array as static ground, carrying an `mv` block;
+// everything that walks on platforms keeps working unchanged. Each frame they
+// step first, record the delta they travelled, and hand it to whatever is
+// standing on them — without that, an entity would slide off a platform that
+// moves out from under it.
+const FALL_SHAKE_DUR = 0.45, FALL_GRAV = 1500;
+
+// Per world: the first level movers appear on, how many at most, and which kinds.
+// World 1 stays entirely static — it is where the game teaches jumping.
+const MOVING_PLAT_CFG = {
+  2:{ from:6, max:2, kinds:['h'] },
+  3:{ from:3, max:3, kinds:['h','v'] },
+  4:{ from:1, max:3, kinds:['h','v','fall'] },
+  5:{ from:1, max:4, kinds:['h','v','fall'] },
+  6:{ from:1, max:4, kinds:['h','v','fall'] },
+};
+
+function carryRider(e){
+  const p=e.rideP;
+  if(!p||p.gone||(!p.dx&&!p.dy)) return;
+  e.x+=p.dx; e.y+=p.dy;
+  // Patrol bounds are absolute level coords, so they have to travel too or a
+  // carried enemy immediately walks itself back off the platform.
+  if(e.pL!=null){ e.pL+=p.dx; e.pR+=p.dx; }
+}
+
+function updatePlatforms(dt){
+  if(!levelData||!levelData.hasMovers) return;
+  for(const p of levelData.plats){
+    const m=p.mv;
+    if(!m||p.gone) continue;
+    const px=p.x, py=p.y;
+    if(m.kind==='h'){
+      p.x+=m.speed*m.dir*dt;
+      if(p.x<m.min){ p.x=m.min; m.dir=1; }
+      else if(p.x>m.max){ p.x=m.max; m.dir=-1; }
+    } else if(m.kind==='v'){
+      p.y+=m.speed*m.dir*dt;
+      if(p.y<m.min){ p.y=m.min; m.dir=1; }
+      else if(p.y>m.max){ p.y=m.max; m.dir=-1; }
+    } else {
+      if(m.state==='idle'){
+        if(phil&&!phil.dead&&phil.rideP===p){ m.state='shake'; m.t=FALL_SHAKE_DUR; SFX.land(); }
+      } else if(m.state==='shake'){
+        m.t-=dt;
+        m.wob=Math.sin((FALL_SHAKE_DUR-m.t)*42)*2.5;   // draw-only; collision stays put
+        if(m.t<=0){ m.state='drop'; m.vy=0; m.wob=0; }
+      } else if(m.state==='drop'){
+        m.vy+=FALL_GRAV*dt;
+        p.y+=m.vy*dt;
+        if(p.y>H+220) p.gone=true;
+      }
+    }
+    p.dx=p.x-px; p.dy=p.y-py;
+  }
+  if(phil&&!phil.dead) carryRider(phil);
+  for(const e of enemies) if(!e.dead) carryRider(e);
+}
+
+// Falling platforms are one-shot, so a death has to put them back or the level
+// becomes unfinishable on the second attempt. Sliding movers keep their current
+// position — resetting those could drop an enemy that was riding one.
+function resetFallenPlatforms(){
+  if(!levelData||!levelData.hasMovers) return;
+  for(const p of levelData.plats){
+    const m=p.mv;
+    if(!m||m.kind!=='fall') continue;
+    p.x=m.bx; p.y=m.by; p.dx=0; p.dy=0; p.gone=false;
+    m.state='idle'; m.t=0; m.vy=0; m.wob=0;
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -303,6 +381,61 @@ function isHazardZoneBlocked(x, w, checkX, flagX){
   return !!(checkX&&x<checkX+110&&x+w>checkX-110);
 }
 
+// Turns some of the level's spare floating platforms into movers, in place.
+// Returns whether any were made, so updatePlatforms can skip static levels
+// outright. Travel distance is fitted to the room a platform actually has, so a
+// slider never drifts into its neighbours.
+function attachMovers(world, level, plats, busy, flagX, rng){
+  const cfg=MOVING_PLAT_CFG[world];
+  if(!cfg||level<cfg.from) return false;
+
+  const candidates=plats.filter(p =>
+    p.y<GROUND_Y && p.w>=80 && p.x>520 && p.x+p.w<flagX-220 && !busy.has(p));
+  let made=0;
+
+  for(const p of candidates){
+    if(made>=cfg.max) break;
+    if(rng()<0.45) continue;
+    const kind=cfg.kinds[Math.floor(rng()*cfg.kinds.length)];
+
+    if(kind==='fall'){
+      p.mv={ kind:'fall', bx:p.x, by:p.y, state:'idle', t:0, vy:0, wob:0 };
+    } else if(kind==='h'){
+      // Nearest platform either side at roughly the same height caps the travel
+      let room=260;
+      for(const o of plats){
+        if(o===p||Math.abs(o.y-p.y)>60) continue;
+        if(o.x+o.w<=p.x) room=Math.min(room,p.x-(o.x+o.w));
+        else if(o.x>=p.x+p.w) room=Math.min(room,o.x-(p.x+p.w));
+      }
+      const travel=Math.floor(Math.min(130,room-34));
+      if(travel<40) continue;
+      p.mv={ kind:'h', bx:p.x, by:p.y, min:p.x-travel, max:p.x+travel,
+             speed:46+Math.floor(rng()*40), dir:rng()<0.5?-1:1 };
+    } else {
+      let up=Math.min(120,p.y-160);
+      const down=Math.min(90,GROUND_Y-70-p.y);
+      // An elevator that rises far enough to press a rider into a platform
+      // overhead would wedge him: the ceiling shoves him down into the elevator
+      // by the platform's travel every frame, and once he is buried past half his
+      // height moveCollide ejects him out the bottom and he falls off the level.
+      // So cap the climb at head clearance for whatever is above the shaft.
+      for(const o of plats){
+        if(o===p||o.y>=p.y) continue;
+        if(o.x>=p.x+p.w||o.x+o.w<=p.x) continue;
+        up=Math.min(up, p.y-(o.y+o.h)-PHIL_H-8);
+      }
+      if(up<40||down<30) continue;
+      p.mv={ kind:'v', bx:p.x, by:p.y, min:p.y-up, max:p.y+down,
+             speed:40+Math.floor(rng()*32), dir:rng()<0.5?-1:1 };
+    }
+    p.dx=0; p.dy=0; p.gone=false;
+    busy.add(p);
+    made++;
+  }
+  return made>0;
+}
+
 function genLevel(world, level) {
   const isBoss = (level===5||level===10);
   const rng = makeRNG(world*100+level);
@@ -343,6 +476,11 @@ function genLevel(world, level) {
     }
   }
 
+  // Platforms that something has been placed on. Moving platforms are picked from
+  // what's left over at the end, so nothing positioned against a platform ever
+  // finds its footing slide away.
+  const busy = new Set();
+
   // Enemies on platforms
   const difficulty=level+(world-1)*10;
   for(const p of plats){
@@ -350,6 +488,7 @@ function genLevel(world, level) {
     if(rng()<0.35) continue;
     const ex=p.x+40+Math.floor(rng()*(p.w-80));
     if(ex < 300) continue; // safe spawn zone near level start
+    busy.add(p);
     enemies.push(makeEnemySpawn(world, level, difficulty, p, ex, rng));
     // Extra enemy on long platforms in later levels
     if(p.w>200&&difficulty>5&&rng()<0.4){
@@ -370,6 +509,7 @@ function genLevel(world, level) {
       if(rng()<0.45) continue;
       const travel=Math.max(18,Math.min(58,Math.floor((p.w-68)/2)));
       if(travel<18) continue;
+      busy.add(p);
       const baseX=p.x+p.w/2-SAW_SIZE/2;
       hazards.push({
         type:'saw',
@@ -405,6 +545,7 @@ function genLevel(world, level) {
     for(const p of rockCandidates){
       if(rockCount>=rockLimit) break;
       if(rng()<0.5) continue;
+      busy.add(p);
       const rx=Math.floor(p.x+p.w*(0.25+rng()*0.5)-ROCK_SIZE/2);
       const ry=Math.max(110,p.y-(68+Math.floor(rng()*42)));
       hazards.push({
@@ -428,16 +569,20 @@ function genLevel(world, level) {
   for(const p of puCandidates){
     if(powerups.length>=puLimit) break;
     if(rng()<0.7) continue;
+    busy.add(p);
     const type=PU_ORDER[Math.floor(rng()*PU_ORDER.length)];
     powerups.push({ type, x:Math.round(p.x+p.w/2-9), y:p.y-30 });
   }
+
+  // Moving platforms — converted in place from leftover floating platforms
+  const hasMovers = attachMovers(world, level, plats, busy, flagX, rng);
 
   // Background decorations
   for(let i=0;i<30;i++){
     decorations.push({type:pickDecorType(world,rng),x:Math.floor(rng()*worldW),scale:0.5+rng()*0.8,layer:rng()<0.5?0:1});
   }
 
-  return { worldW, plats, enemies, decorations, hazards, powerups, checkX, checkY:GROUND_Y-80, flagX, flagY:GROUND_Y-80,
+  return { worldW, plats, enemies, decorations, hazards, powerups, hasMovers, checkX, checkY:GROUND_Y-80, flagX, flagY:GROUND_Y-80,
     playerStart:{x:80,y:GROUND_Y-PHIL_H-1}, isBoss:false };
 }
 
@@ -1053,6 +1198,7 @@ function philDie(){
 
 function respawnPhil(){
   const sp=checkpointRespawn||levelData.playerStart;
+  resetFallenPlatforms();
   initPhil(sp.x,sp.y);
   lastSafeGround={x:sp.x,y:sp.y};
   G.screen='PLAYING';
@@ -2861,7 +3007,9 @@ function drawBackground(){
 function drawPlatforms(){
   const w=WORLDS[G.world];
   for(const p of levelData.plats){
-    const px=p.x-cam.x, py=p.y-cam.y;
+    if(p.gone) continue;
+    const wob=p.mv&&p.mv.wob||0;
+    const px=p.x-cam.x+wob, py=p.y-cam.y;
     if(px+p.w<0||px>W) continue;
     ctx.fillStyle=w.platFill; ctx.fillRect(px,py,p.w,p.h);
     ctx.fillStyle=w.platTop; ctx.fillRect(px,py,p.w,4);
@@ -2883,7 +3031,48 @@ function drawPlatforms(){
       ctx.fillStyle='rgba(255,255,255,0.25)';
       for(let i=0;i<Math.floor(p.w/50);i++) ctx.fillRect(px+10+i*50,py+5,18,2);
     }
+    if(p.mv) drawMoverMarkings(p,px,py);
   }
+}
+
+// A moving platform has to be readable as one *before* you jump onto it, so each
+// kind gets its own marking: travel arrows for sliders and elevators, cracks for
+// the ones that give way.
+function drawMoverMarkings(p,px,py){
+  const m=p.mv, cx=px+p.w/2, mid=py+p.h/2;
+  ctx.save();
+  if(m.kind==='fall'){
+    ctx.strokeStyle=m.state==='idle'?'rgba(255,215,120,0.75)':'rgba(255,120,90,0.95)';
+    ctx.lineWidth=1.6;
+    for(let i=0;i<Math.max(2,Math.floor(p.w/28));i++){
+      const zx=px+14+i*28;
+      ctx.beginPath();
+      ctx.moveTo(zx,py+3); ctx.lineTo(zx-4,mid); ctx.lineTo(zx+3,py+p.h-2);
+      ctx.stroke();
+    }
+  } else {
+    const horiz=m.kind==='h';
+    ctx.fillStyle='rgba(255,235,150,0.85)';
+    // Two arrowheads pointing along the axis of travel
+    for(const s of [-1,1]){
+      ctx.beginPath();
+      if(horiz){
+        const ax=cx+s*(p.w/2-7);
+        ctx.moveTo(ax+s*5,mid); ctx.lineTo(ax-s*3,mid-5); ctx.lineTo(ax-s*3,mid+5);
+      } else {
+        const ay=mid+s*7;
+        ctx.moveTo(cx,ay+s*5); ctx.lineTo(cx-5,ay-s*2); ctx.lineTo(cx+5,ay-s*2);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+    // Faint rail showing the full span the platform covers
+    ctx.strokeStyle='rgba(255,235,150,0.22)'; ctx.lineWidth=2;
+    ctx.beginPath();
+    if(horiz){ ctx.moveTo(m.min-cam.x+p.w/2,mid); ctx.lineTo(m.max-cam.x+p.w/2,mid); }
+    else { ctx.moveTo(cx,m.min-cam.y+p.h/2); ctx.lineTo(cx,m.max-cam.y+p.h/2); }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawDecorations(){
@@ -5058,6 +5247,7 @@ function loop(ts){
         else if(pauseSelect===2){ paused=false; G.screen='TITLE'; }
       }
     } else {
+      updatePlatforms(dt);   // must lead: riders are carried before they move themselves
       updatePhil(dt);
       updateEnemies(dt);
       // Boss Rush difficulty ramp: run the boss on a faster clock as the run goes

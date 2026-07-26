@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- Moving platforms — horizontal sliders, vertical elevators, and platforms that shake and drop away a
+  moment after Phil lands on them (restored when he respawns). Anything standing on one is carried
+  with it, enemies included, and each kind is marked so it reads as a mover before you jump: travel
+  arrows and a rail for sliders and elevators, cracks for the ones that give way. Ramped in by world —
+  World 1 stays static, World 2 gets sliders from level 6, World 3 adds elevators, Worlds 4-6 add
+  falling platforms ([#31](https://github.com/natethedrummer/stickman-escape/issues/31))
 - Collectible power-ups — 2–3 per level on floating platforms, seeded so a level always rolls the
   same set. Invincibility star (5s, blocks even saws and lava, with a gold aura distinct from the
   spawn-invincibility flicker), speed boost (8s, faster run and higher jump with motion streaks) and
