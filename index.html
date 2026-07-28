@@ -91,7 +91,13 @@ const SFX = {
 //  INPUT
 // ══════════════════════════════════════════════════════
 const keys={}, touches={L:false,R:false,J:false,A:false,S:false,start:false};
-const isTouchDevice='ontouchstart' in window;
+// iPadOS Safari defaults to desktop-class browsing and does not put `ontouchstart`
+// on window, so an iPad reported itself as a desktop and got no on-screen controls
+// at all — unplayable without a keyboard. A coarse primary pointer catches it.
+// Additive by design: this can only switch the controls on for a device that had
+// none, never off for one that already worked.
+const hasTouchEvents='ontouchstart' in window;
+const isTouchDevice=hasTouchEvents||(window.matchMedia&&matchMedia('(pointer: coarse)').matches);
 const WORLD_CHEAT='xavier', MOBILE_WORLD_CHEAT='jjsjjsjjs', LEVEL_CHEAT='drum', MOBILE_LEVEL_CHEAT='sssjjj', WORLD_CHEAT_TIMEOUT=1400;
 let worldCheatBuffer='', mobileWorldCheatBuffer='', worldCheatLastAt=0;
 let levelCheatBuffer='', mobileLevelCheatBuffer='', levelCheatLastAt=0;
@@ -107,10 +113,29 @@ canvas.addEventListener('touchstart',e=>{ e.preventDefault(); initAC(); touches.
   const t=e.changedTouches[0]; if(t) tapPoint=cutPoint(t.clientX,t.clientY); },{passive:false});
 canvas.addEventListener('touchend',()=>{ touches.start=false; });
 canvas.addEventListener('mousedown',e=>{ initAC(); tapPoint=cutPoint(e.clientX,e.clientY); });
+// Same fallback for the canvas itself. Without it a tap sets tapPoint (Safari
+// synthesises mousedown) but never touches.start, so the "TAP TO TRY AGAIN"
+// screens — which read In.restart() — could not be dismissed by touch at all.
+if(!hasTouchEvents){
+  canvas.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='mouse') return;          // the mouse is already handled above
+    initAC(); touches.start=true; tapPoint=cutPoint(e.clientX,e.clientY);
+  });
+  canvas.addEventListener('pointerup',e=>{ if(e.pointerType!=='mouse') touches.start=false; });
+  canvas.addEventListener('pointercancel',()=>{ touches.start=false; });
+}
 function bindT(id,p,onPress){ const el=document.getElementById(id);
   el.addEventListener('touchstart',e=>{e.preventDefault();initAC();touches[p]=true; onPress&&onPress()},{passive:false});
   el.addEventListener('touchend',e=>{e.preventDefault();touches[p]=false},{passive:false});
-  el.addEventListener('touchcancel',()=>touches[p]=false); }
+  el.addEventListener('touchcancel',()=>touches[p]=false);
+  // Pointer fallback for touch devices that don't dispatch touch events (an iPad
+  // in desktop mode). Only bound where touch events are absent, so a phone keeps
+  // exactly the path above and no button can fire twice for one press.
+  if(hasTouchEvents) return;
+  el.addEventListener('pointerdown',e=>{e.preventDefault();initAC();touches[p]=true; onPress&&onPress()});
+  el.addEventListener('pointerup',  e=>{e.preventDefault();touches[p]=false});
+  el.addEventListener('pointercancel',()=>touches[p]=false);
+  el.addEventListener('pointerleave',()=>touches[p]=false); }
 if(isTouchDevice){ document.getElementById('touch').style.display='block';
   bindT('tL','L');bindT('tR','R',()=>handleWorldCheatTouch('r'));bindT('tJ','J',()=>handleWorldCheatTouch('j'));bindT('tA','A');bindT('tS','S',()=>handleWorldCheatTouch('s')); }
 

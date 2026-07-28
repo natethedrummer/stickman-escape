@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- iPad: on-screen controls now appear. Detection was `'ontouchstart' in window`, which iPadOS Safari
+  does not expose in its default desktop-class browsing mode, so an iPad was treated as a desktop and
+  shown no controls at all — unplayable without a keyboard. Detection now also accepts a coarse
+  primary pointer, and the buttons and canvas fall back to pointer events where touch events are
+  absent, so "tap to continue" screens can be dismissed by touch too
 - Mobile: the move/jump/attack pad no longer covers menus. It is a fixed overlay pinned to the bottom
   of the window, so in landscape — how anyone plays a 16:9 platformer on a phone — it sat on top of
   the world map's info panel and swallowed the taps meant for it. It now only appears during play
