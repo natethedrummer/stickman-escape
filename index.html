@@ -113,6 +113,21 @@ function bindT(id,p,onPress){ const el=document.getElementById(id);
   el.addEventListener('touchcancel',()=>touches[p]=false); }
 if(isTouchDevice){ document.getElementById('touch').style.display='block';
   bindT('tL','L');bindT('tR','R',()=>handleWorldCheatTouch('r'));bindT('tJ','J',()=>handleWorldCheatTouch('j'));bindT('tA','A');bindT('tS','S',()=>handleWorldCheatTouch('s')); }
+
+// The move/jump/attack pad is a fixed overlay pinned to the bottom of the window.
+// In landscape — which is how anyone plays a 16:9 platformer on a phone — that
+// lands it right on top of the world map's info panel and the lower title menu
+// rows, and the buttons swallow the taps meant for them. They mean nothing
+// outside actual play, so they only exist during it.
+let touchPadShown=true;
+function syncTouchPad(){
+  if(!isTouchDevice) return;
+  const want = G.screen==='PLAYING';
+  if(want===touchPadShown) return;
+  touchPadShown=want;
+  document.getElementById('touch').style.display = want?'block':'none';
+  if(!want){ touches.L=touches.R=touches.J=touches.A=touches.S=false; }
+}
 const In={
   left:  ()=>keys['ArrowLeft'] ||keys['KeyA']||touches.L,
   right: ()=>keys['ArrowRight']||keys['KeyD']||touches.R,
@@ -4904,15 +4919,21 @@ function handleMapInput(){
   } else mapKeyHeld=false;
 
   if(tapPoint){
+    // Nearest node within a generous radius, not the first one inside a tight
+    // one: a 26px canvas radius is about 18 CSS px on a phone, well under the
+    // ~44px a fingertip needs.
     const total=levelsInWorld(mapW);
+    let best=-1, bestD=44;
     for(let i=0;i<total;i++){
       const p=mapNodePos(i,total);
-      if(Math.hypot(tapPoint.x-p.x,tapPoint.y-p.y)<26){
-        const l=i+1;
-        // First tap selects, a second tap on the same node plays it
-        if(mapL===l) { tapPoint=null; mapPlay(); return; }
-        mapL=l; SFX.pickup(); tapPoint=null; return;
-      }
+      const d=Math.hypot(tapPoint.x-p.x,tapPoint.y-p.y);
+      if(d<bestD){ bestD=d; best=i; }
+    }
+    if(best>=0){
+      const l=best+1;
+      // First tap selects, a second tap on the same node plays it
+      if(mapL===l){ tapPoint=null; mapPlay(); return; }
+      mapL=l; SFX.pickup(); tapPoint=null; return;
     }
     // Tap the world arrows
     if(tapPoint.y<70){
@@ -5122,11 +5143,22 @@ function handleTitleInput(){
   } else titleKeyHeld=false;
   // Tap / click a menu row directly (this is how touch devices drive the menu)
   if(tapPoint){
-    for(let i=0;i<items.length;i++){
-      if(cutInBox(tapPoint,titleBox(i,items.length))){
-        if(titleSelect!==i){ titleSelect=i; titleConfirm=false; }
-        tapPoint=null; titleActivate(); return;
+    // Nearest row rather than a strict box test. At phone scale a row is only
+    // ~18 CSS px tall, and the rows sit 2px apart — padding the boxes to finger
+    // size would make them overlap, so a tap in the seam would pick the wrong
+    // one. Snapping to the nearest centre covers the gaps without ambiguity.
+    const first=titleBox(0,items.length), last=titleBox(items.length-1,items.length);
+    const inCol = tapPoint.x>first.x-24 && tapPoint.x<first.x+first.w+24;
+    const inRows = tapPoint.y>first.y-10 && tapPoint.y<last.y+last.h+10;
+    if(inCol&&inRows){
+      let best=0, bestD=Infinity;
+      for(let i=0;i<items.length;i++){
+        const b=titleBox(i,items.length);
+        const d=Math.abs(tapPoint.y-(b.y+b.h/2));
+        if(d<bestD){ bestD=d; best=i; }
       }
+      if(titleSelect!==best){ titleSelect=best; titleConfirm=false; }
+      tapPoint=null; titleActivate(); return;
     }
     tapPoint=null; titleConfirm=false;
   }
@@ -6035,6 +6067,7 @@ function loop(ts){
   requestAnimationFrame(loop);
   const dt=Math.min((ts-lastT)/1000,.05); lastT=ts; frameN++;
 
+  syncTouchPad();
   ctx.clearRect(0,0,W,H);
 
   // --- TITLE ---

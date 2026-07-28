@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- Mobile: the move/jump/attack pad no longer covers menus. It is a fixed overlay pinned to the bottom
+  of the window, so in landscape — how anyone plays a 16:9 platformer on a phone — it sat on top of
+  the world map's info panel and swallowed the taps meant for it. It now only appears during play
+- Mobile: world map nodes and title menu rows snap to the nearest target instead of needing an exact
+  hit. A map node was a ~18px tap target on a phone, and the title rows sit too close together to pad
+  without overlapping each other
+
 ### Changed
 - The Giant Stickman Mech now fights back. It walks Phil down instead of decelerating to a standstill
   in every state, has 32 health instead of 24, deals a full heart with fists and laser instead of half,
