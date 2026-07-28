@@ -2,7 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+- The Giant Stickman Mech now fights back. It walks Phil down instead of decelerating to a standstill
+  in every state, has 32 health instead of 24, deals a full heart with fists and laser instead of half,
+  gained a floor-sweeping beam from half health, and its stomp now throws up a column of force that
+  can't be jumped over (the travelling ground waves still can)
+  ([#49](https://github.com/natethedrummer/stickman-escape/issues/49))
+
 ### Added
+- Shrink Ray finale — emptying the Mech's health bar no longer ends the game. It collapses, sheds a
+  shrink ray that Phil picks up automatically, then reboots in a third phase. Z fires the ray instead
+  of swinging the sword; seven hits shrink the Mech from three times Phil's height down to his size,
+  and it gets faster the smaller it gets (though its attacks weaken with it). Once it's tiny it flees
+  harmlessly and the sword lands the finishing blow, and only then does the ending play. Boss Rush
+  keeps the original one-phase fight ([#49](https://github.com/natethedrummer/stickman-escape/issues/49))
 - World map and level select — a canvas-drawn overworld reached from the title screen and the pause
   menu. One world at a time, its levels laid out as stepping stones along a winding path, with Phil
   walking to whichever node you select. Cleared levels show a star, boss levels a skull, locked ones

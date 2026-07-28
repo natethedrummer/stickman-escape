@@ -910,6 +910,10 @@ let hasKey = false;                 // picked up the secret key on this level
 let secretRun = null;               // {theme, world, returnLevel} while inside a secret level
 let secretIntroTimer = 0, secretAward = 0, secretGolden = false;
 let levelStartScore = 0;            // score when the level began; the map shows the difference
+// The shrink ray is a property of the final fight, not of Phil — keeping it out
+// of initPhil means dying and respawning mid-finale doesn't take it away.
+let hasRay = false, rayCD = 0, rayFx = null;
+const RAY_CD = 0.85;
 const BOUNCE_V = -520;              // launch speed off every landing in the springs stage
 let mechFinalTriggered = false;
 let paused = false, pauseSelect = 0, pauseKeyHeld = false;
@@ -983,6 +987,7 @@ function startLevel(){
   if(G.mode==='CAMPAIGN') markReached(G.world,G.level);
   levelStartScore=G.score;
   secretRun=null; gravMul=1; hasKey=false;   // never inherit secret-level rules
+  hasRay=false; rayCD=0; rayFx=null;
   levelData = genLevel(G.world, G.level);
   enemies   = spawnEnemies(levelData.enemies);
   projs     = [];
@@ -1184,6 +1189,7 @@ function startFinalBossLevel(){
   writeSave();                    // level 11 in the save = "reached the final boss"
   markReached(TOTAL_WORLDS,11);
   levelStartScore=G.score;
+  hasRay=false; rayCD=0; rayFx=null;
   G.screen='FINAL_BOSS_INTRO'; bossIntroTimer=3.5;
   levelData = genBossArena(TOTAL_WORLDS,10,makeRNG(TOTAL_WORLDS*100+10));
   levelData.worldW=1600;
@@ -1269,8 +1275,13 @@ function updatePhil(dt){
     if(phil.onGround){ phil.vy=boosted?SPEED_JUMP:-620; phil.jumpBuffer=0; SFX.jump(); dustPuff(phil.x+phil.w/2,phil.y+phil.h); }
   }
 
-  // Attack
-  if(In.atk()&&phil.atkCD<=0&&!shielding){
+  // Attack — while Phil is holding the shrink ray, Z fires that instead of the
+  // sword, so the finale doesn't ask the player to learn a new key at the climax
+  if(rayCD>0) rayCD-=dt;
+  if(rayFx){ rayFx.life-=dt; if(rayFx.life<=0) rayFx=null; }
+  if(hasRay){
+    if(In.atk()&&rayCD<=0&&!shielding){ fireShrinkRay(); rayCD=RAY_CD; }
+  } else if(In.atk()&&phil.atkCD<=0&&!shielding){
     phil.attacking=true; phil.atkTimer=ATK_DUR; phil.atkCD=ATK_CD;
     phil.attackedSet.clear(); SFX.atk();
   }
@@ -1357,7 +1368,10 @@ function updatePhil(dt){
   }
 
   // Boss contact
-  if(boss&&!boss.dead&&phil.invTimer<=0&&overlapBoss(phil)){
+  // A fleeing, knee-high Mech is harmless — bumping into it must not chip Phil
+  const bossHarmless = boss&&boss.type==='mech'&&boss.phase===3&&
+                       (boss.aiState==='FLEE'||boss.aiState==='COLLAPSE');
+  if(boss&&!boss.dead&&!bossHarmless&&phil.invTimer<=0&&overlapBoss(phil)){
     const focus=getBossFocusBox()||boss;
     philTakeDmg(0.5); phil.vx=phil.x<focus.x+focus.w/2?-250:250; phil.vy=-320;
   }
@@ -1472,6 +1486,44 @@ function levelComplete(){
 //  ENEMIES
 // ══════════════════════════════════════════════════════
 const BOMB_RADIUS = 56;
+
+// ══════════════════════════════════════════════════════
+//  GIANT STICKMAN MECH — SIZE
+// ══════════════════════════════════════════════════════
+// drawMech's layout constants are all absolute pixels laid out for this exact
+// box (it never references b.h at all), so the design size is fixed here and the
+// body is drawn through a scale transform instead of being re-measured.
+const MECH_W=120, MECH_H=160;
+const MECH_MIN_SCALE=0.28;        // roughly Phil-sized once fully shrunk
+const SHRINK_HITS=7;
+
+// Resize the Mech about its feet. `y` has to be recomputed in lockstep with `h`
+// so `y+h` stays exactly on the floor — a body left buried more than half its
+// height gets pushed *down* out of the platform and falls out of the arena.
+function setMechScale(b,s){
+  const cx=b.x+b.w/2;             // shrink about the centre, not the left edge
+  b.shrink=s;
+  b.w=Math.round(MECH_W*s);
+  b.h=Math.round(MECH_H*s);
+  b.x=cx-b.w/2;
+  b.y=GROUND_Y-b.h;
+}
+
+// Height above the floor of a point that sits `d` px below the design-space top,
+// e.g. the eye at design y=18 → GROUND_Y-142*scale. Used by the attack origins so
+// a shrunken Mech fires from its own head rather than from thin air.
+function mechAnchorY(b,designY){ return GROUND_Y-(MECH_H-designY)*b.shrink; }
+
+// Attacks lose their bite along with their size, or the last stage — when the
+// Mech is smallest and hardest to hit — would also be the most punishing.
+function mechDmg(b,base){ return b.phase===3 ? Math.max(0.5,base*b.shrink) : base; }
+
+// Walk speed. Phase 3 accelerates as it shrinks — a small Mech skittering about
+// is harder to hit than a slow giant, which keeps the finale tense.
+function mechSpeed(b){
+  const base=b.phase>=2?140:90;
+  return b.phase===3 ? base*(1+(1-b.shrink)*2.2) : base;
+}
 
 function alertEnemy(e){
   e.aiState='CHASE'; e.alertTimer=4;
@@ -1944,10 +1996,12 @@ function spawnBoss(type, worldW){
     health:19,maxHealth:19, facingR:false, onGround:false, wasOnGround:false,
     aiState:'INTRO', stTimer:2.3, walkCycle:0, invTimer:0, dead:false, deathTimer:0,
     tasers:[], flashes:[], heliShots:[], shockwaves:[], phase:1, actionDone:false, heli:null };
-  if(type==='mech') return { type, x:worldW/2-60,y:GROUND_Y-160, vx:0,vy:0, w:120,h:160,
-    health:24,maxHealth:24, facingR:false, onGround:false, wasOnGround:false,
+  if(type==='mech') return { type, x:worldW/2-MECH_W/2,y:GROUND_Y-MECH_H, vx:0,vy:0, w:MECH_W,h:MECH_H,
+    health:32,maxHealth:32, facingR:false, onGround:false, wasOnGround:false,
     aiState:'INTRO', stTimer:3.0, walkCycle:0, invTimer:0, dead:false, deathTimer:0,
     laserActive:false, laserAngle:0, laserTimer:0,
+    sweepX:0, sweepDir:1,
+    shrink:1, shrinkHits:0, rayGiven:false,
     fists:[], shockwaves:[], phase:1 };
 }
 
@@ -1980,6 +2034,9 @@ function overlapBoss(box){
 
 function hitBoss(dmg, hitBox=null){
   if(!boss||boss.invTimer>0) return;
+  // In the shrink phase only the ray does anything, until the Mech is small
+  // enough to flee — then the sword lands the finishing blow.
+  if(boss.type==='mech'&&boss.phase===3&&boss.aiState!=='FLEE') return;
   const target=getBossHitTarget(hitBox||{x:boss.x,y:boss.y,w:boss.w,h:boss.h}) || boss;
   if(!target) return;
   if(boss.type==='revenant'&&boss.twins?.length){
@@ -2020,7 +2077,61 @@ function hitBoss(dmg, hitBox=null){
   }
 }
 
+// Beating the Mech's health bar no longer ends the game — it collapses, drops the
+// shrink ray and the real finale begins. This has to intercept before the shared
+// bossKilled body marks it dead. Boss Rush is excluded: that mode is meant to be
+// back-to-back fights, and it was already rated a little hard.
+function startShrinkPhase(){
+  const b=boss;
+  b.phase=3; b.aiState='COLLAPSE'; b.stTimer=2.8;
+  b.health=b.maxHealth;          // the bar becomes the shrink gauge from here
+  b.invTimer=0; b.laserActive=false; b.vx=0;
+  b.fists.length=0; b.shockwaves.length=0;
+  shake=1.1; SFX.roar(); SFX.stomp();
+  for(let i=0;i<6;i++) setTimeout(()=>{
+    if(!boss) return;
+    burst(boss.x+Math.random()*boss.w,boss.y+Math.random()*boss.h,'#7dfcff',14,150,220);
+    SFX.bossHit();
+  },i*280);
+}
+
+function shrinkBoss(){
+  const b=boss;
+  b.shrinkHits++;
+  setMechScale(b, 1-(1-MECH_MIN_SCALE)*Math.min(1,b.shrinkHits/SHRINK_HITS));
+  shake=0.5; SFX.bossHit();
+  burst(b.x+b.w/2,b.y+b.h/2,'#7dfcff',16,150,0);
+  scorePopup(b.x+b.w/2,b.y-14,'+'+addScore(300),'#7dfcff');
+  if(b.shrinkHits>=SHRINK_HITS){
+    // Small enough to be harmless. The ray is spent, so Z goes back to the sword
+    // for the finishing blow.
+    b.aiState='FLEE'; b.stTimer=99;
+    b.health=1; b.maxHealth=1;
+    b.laserActive=false; b.fists.length=0; b.shockwaves.length=0;
+    hasRay=false;
+    SFX.win();
+    scorePopup(phil.x+phil.w/2,phil.y-40,'FINISH IT!','#ffd54a');
+  }
+}
+
+function fireShrinkRay(){
+  const dir=phil.facingR?1:-1;
+  const ox=phil.x+phil.w/2+dir*14, oy=phil.y+18;
+  rayFx={ x:ox, y:oy, dir, life:0.22 };
+  SFX.laser();
+  if(!boss||boss.dead||boss.phase!==3||boss.aiState==='COLLAPSE'||boss.aiState==='FLEE') return;
+  // Hitscan: the beam is instant, so there's no projectile to chase. Tested
+  // against the Mech's whole box, not its centre — at full size Phil is often
+  // standing inside its footprint, and a centre test would score that a miss.
+  const RANGE=640;
+  const bl=boss.x, br=boss.x+boss.w;
+  const inFront = dir>0 ? (br>ox && bl<ox+RANGE) : (bl<ox && br>ox-RANGE);
+  const inBand = oy>boss.y-12 && oy<boss.y+boss.h+12;
+  if(inFront&&inBand) shrinkBoss();
+}
+
 function bossKilled(){
+  if(boss.type==='mech'&&boss.phase<3&&G.mode!=='RUSH'){ startShrinkPhase(); return; }
   boss.dead=true; boss.deathTimer=3.0; SFX.win(); shake=1.2;
   const focus=getBossFocusBox()||boss;
   for(let i=0;i<5;i++) setTimeout(()=>{
@@ -2272,7 +2383,7 @@ function updateMech(dt){
       b.fists.splice(i,1); continue;
     }
     const fb={x:f.x-15,y:f.y-15,w:30,h:30};
-    if(phil.invTimer<=0&&overlap(phil,fb)){ philTakeDmg(0.5); f.life=0; }
+    if(phil.invTimer<=0&&overlap(phil,fb)){ philTakeDmg(mechDmg(b,1.0)); f.life=0; }
   }
 
   // Shockwaves
@@ -2280,7 +2391,11 @@ function updateMech(dt){
     const sw=b.shockwaves[i];
     sw.x+=sw.vx*dt; sw.life-=dt;
     if(sw.life<=0){b.shockwaves.splice(i,1);continue;}
-    if(phil.onGround&&phil.invTimer<=0&&overlap(phil,sw)){ philTakeDmg(0.5); }
+    // Ground waves can still be jumped; the stomp column cannot, so standing on
+    // top of a stomp is punished without taking the dodge away from the waves.
+    if((sw.column||phil.onGround)&&phil.invTimer<=0&&overlap(phil,sw)){
+      philTakeDmg(mechDmg(b,sw.column?1.0:0.5));
+    }
   }
 
   // Laser eyes
@@ -2289,14 +2404,20 @@ function updateMech(dt){
     else { b.laserActive=false; }
     // Laser hits player
     if(phil.invTimer<=0){
-      const eyeX=b.x+b.w/2, eyeY=b.y+35;
+      const eyeX=b.x+b.w/2, eyeY=mechAnchorY(b,35);
       const targetX=phil.x+phil.w/2, targetY=phil.y+phil.h/2;
       const ang=Math.atan2(targetY-eyeY,targetX-eyeX);
       b.laserAngle+=(ang-b.laserAngle)*Math.min(1,2*dt);
       // Check player on line
       const dist=Math.hypot(targetX-eyeX,targetY-eyeY);
-      if(dist<400){ const perp=Math.abs((targetY-eyeY)*Math.cos(b.laserAngle)-(targetX-eyeX)*Math.sin(b.laserAngle)); if(perp<16){ philTakeDmg(0.5); } }
+      if(dist<400){ const perp=Math.abs((targetY-eyeY)*Math.cos(b.laserAngle)-(targetX-eyeX)*Math.sin(b.laserAngle)); if(perp<16){ philTakeDmg(mechDmg(b,1.0)); } }
     }
+  }
+
+  // Phase 2+ sweep: a low beam raked across the floor that has to be jumped
+  if(b.aiState==='SWEEP'&&phil.invTimer<=0&&phil.onGround
+     &&Math.abs((phil.x+phil.w/2)-b.sweepX)<26){
+    philTakeDmg(mechDmg(b,1.0));
   }
 
   switch(b.aiState){
@@ -2304,31 +2425,69 @@ function updateMech(dt){
       b.vx=-60; moveCollide(b,levelData.plats,dt);
       if(b.stTimer<=0){ b.aiState='IDLE'; b.stTimer=1.2; SFX.roar(); SFX.roar(); shake=0.6; }
       break;
-    case 'IDLE':
-      b.vx*=Math.pow(0.05,dt); moveCollide(b,levelData.plats,dt);
+    case 'IDLE': {
+      // The Mech used to decelerate to a standstill in every state, which made it
+      // a stationary turret you could park beside and swing at. Now it closes.
+      const dxi=(phil.x+phil.w/2)-(b.x+b.w/2);
+      if(Math.abs(dxi)>120) b.vx=Math.sign(dxi)*mechSpeed(b);
+      else b.vx*=Math.pow(0.05,dt);
+      moveCollide(b,levelData.plats,dt);
       if(b.stTimer<=0){
         b.facingR=(phil.x+phil.w/2)>(b.x+b.w/2);
         const r=Math.random();
-        const spd=b.phase===2?0.7:1.0; // phase 2 = faster (shorter timers)
-        if(r<0.3){ b.aiState='FIST'; b.stTimer=0.8*spd; }
-        else if(r<0.6){ b.aiState='LASER'; b.stTimer=0.9*spd; }
+        const spd=b.phase>=2?0.7:1.0; // later phases = faster (shorter timers)
+        if(b.phase>=2&&r<0.25){ b.aiState='SWEEP'; b.stTimer=1.5;
+          b.sweepDir=b.facingR?1:-1; b.sweepX=b.x+b.w/2-b.sweepDir*40; SFX.laser(); }
+        else if(r<0.45){ b.aiState='FIST'; b.stTimer=0.8*spd; }
+        else if(r<0.7){ b.aiState='LASER'; b.stTimer=0.9*spd; }
         else{ b.aiState='STOMP'; b.stTimer=0.8*spd; }
       }
       break;
-    case 'FIST':
-      b.vx*=Math.pow(0.05,dt); moveCollide(b,levelData.plats,dt);
+    }
+    case 'FIST': {
+      const dxf=(phil.x+phil.w/2)-(b.x+b.w/2);
+      if(Math.abs(dxf)>150) b.vx=Math.sign(dxf)*mechSpeed(b)*0.55;
+      else b.vx*=Math.pow(0.05,dt);
+      moveCollide(b,levelData.plats,dt);
       if(b.stTimer<=0){
-        const n=b.phase===2?2:1;
+        const n=b.phase>=2?2:1;
         for(let i=0;i<n;i++){
-          const offsetX=b.facingR?(b.w-20+i*30):(-i*30);
+          const offsetX=b.facingR?(b.w-20*b.shrink+i*30):(-i*30);
           const targetX=phil.x+phil.w/2+i*60;
-          const dx=targetX-(b.x+offsetX), dy=GROUND_Y-(b.y+60);
+          const originY=mechAnchorY(b,60);
+          const dx=targetX-(b.x+offsetX), dy=GROUND_Y-originY;
           const t=0.7; const g2=600;
-          b.fists.push({x:b.x+offsetX,y:b.y+60,vx:dx/t,vy:dy/t-0.5*g2*t,life:2.0});
+          b.fists.push({x:b.x+offsetX,y:originY,vx:dx/t,vy:dy/t-0.5*g2*t,life:2.0});
         }
-        SFX.roar(); b.aiState='IDLE'; b.stTimer=b.phase===2?1.0:1.5;
+        SFX.roar(); b.aiState='IDLE'; b.stTimer=b.phase>=2?1.0:1.5;
       }
       break;
+    }
+    case 'SWEEP':
+      b.vx*=Math.pow(0.05,dt); moveCollide(b,levelData.plats,dt);
+      b.sweepX+=b.sweepDir*430*dt;
+      if(b.stTimer<=0){ b.aiState='IDLE'; b.stTimer=1.1; }
+      break;
+    case 'COLLAPSE':
+      // Beaten but not dead: it slumps, sheds the shrink ray, then reboots
+      b.vx*=Math.pow(0.05,dt); moveCollide(b,levelData.plats,dt);
+      if(b.stTimer<=1.5&&!b.rayGiven){
+        b.rayGiven=true; hasRay=true; rayCD=0;
+        SFX.power();
+        scorePopup(phil.x+phil.w/2,phil.y-40,'SHRINK RAY!','#7dfcff');
+        burst(b.x+b.w/2,GROUND_Y-30,'#7dfcff',22,170,0);
+      }
+      if(b.stTimer<=0){ b.aiState='IDLE'; b.stTimer=0.8; SFX.roar(); shake=0.8; }
+      break;
+    case 'FLEE': {
+      // Too small to fight back — it just runs, waiting to be finished off
+      const dxr=(phil.x+phil.w/2)-(b.x+b.w/2);
+      b.vx=(dxr>0?-1:1)*250;
+      b.facingR=dxr<0;
+      if(b.onGround&&Math.random()<0.035) b.vy=-360;
+      moveCollide(b,levelData.plats,dt);
+      break;
+    }
     case 'LASER':
       b.vx*=Math.pow(0.05,dt); moveCollide(b,levelData.plats,dt);
       if(b.stTimer<=0){
@@ -2339,8 +2498,17 @@ function updateMech(dt){
       break;
     case 'STOMP':
       b.vx*=Math.pow(0.05,dt); moveCollide(b,levelData.plats,dt);
-      if(b.stTimer<=0.3&&b.stTimer>0.2){ SFX.stomp(); shake=0.8; b.shockwaves.push({x:b.x-60,y:GROUND_Y-18,vx:-260,w:100,h:18,life:1.6}); b.shockwaves.push({x:b.x+b.w+60,y:GROUND_Y-18,vx:260,w:100,h:18,life:1.6}); burst(b.x+b.w/2,GROUND_Y-20,'#ff8800',16,160,0); }
-      if(b.stTimer<=0){ b.aiState='IDLE'; b.stTimer=b.phase===2?1.0:1.5; }
+      if(b.stTimer<=0.3&&b.stTimer>0.2){
+        SFX.stomp(); shake=0.8;
+        b.shockwaves.push({x:b.x-60,y:GROUND_Y-18,vx:-260,w:100,h:18,life:1.6});
+        b.shockwaves.push({x:b.x+b.w+60,y:GROUND_Y-18,vx:260,w:100,h:18,life:1.6});
+        // Column of force straight up at the impact point — jumping no longer
+        // makes the whole stomp free
+        const colH=Math.round(150*b.shrink);
+        b.shockwaves.push({x:b.x-18,y:GROUND_Y-colH,vx:0,w:b.w+36,h:colH,life:0.4,column:true});
+        burst(b.x+b.w/2,GROUND_Y-20,'#ff8800',16,160,0);
+      }
+      if(b.stTimer<=0){ b.aiState='IDLE'; b.stTimer=b.phase>=2?1.0:1.5; }
       break;
   }
   b.x=Math.max(0,Math.min(b.x,levelData.worldW-b.w));
@@ -3707,16 +3875,26 @@ function drawHUD(){
     puRow++;
   }
 
-  // Boss health bar
+  // Boss health bar — repurposed as a shrink gauge once the finale starts, since
+  // health means nothing when the fight is about size
   if(boss&&!boss.dead){
+    const shrinking=boss.type==='mech'&&boss.phase===3&&boss.aiState!=='FLEE';
     const bw=300, bh=14, bx=(W-bw)/2, by=54;
     ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(bx-2,by-2,bw+4,bh+4);
-    ctx.fillStyle='#330000'; ctx.fillRect(bx,by,bw,bh);
-    const pct=Math.max(0,boss.health/boss.maxHealth);
-    const bcol=pct>.5?'#ee2222':pct>.25?'#ee8800':'#ffdd00';
+    ctx.fillStyle=shrinking?'#1b1030':'#330000'; ctx.fillRect(bx,by,bw,bh);
+    const pct=shrinking ? Math.max(0,1-boss.shrinkHits/SHRINK_HITS)
+                        : Math.max(0,boss.health/boss.maxHealth);
+    const bcol=shrinking?'#7dfcff':(pct>.5?'#ee2222':pct>.25?'#ee8800':'#ffdd00');
     ctx.fillStyle=bcol; ctx.fillRect(bx,by,bw*pct,bh);
-    ctx.fillStyle='#fff'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
-    ctx.fillText(getBossMeta(boss.type).name,W/2,by+10); ctx.textAlign='left';
+    // The label crosses both the filled and empty halves of the bar, so it needs
+    // an outline rather than a flat colour that only works against one of them
+    const blabel=shrinking?'SHRINK THE MECH — Z TO FIRE'
+      :(boss.aiState==='FLEE'?'FINISH IT!':getBossMeta(boss.type).name);
+    ctx.font='bold 11px monospace'; ctx.textAlign='center';
+    ctx.lineWidth=3; ctx.lineJoin='round'; ctx.strokeStyle='rgba(0,0,0,0.85)';
+    ctx.strokeText(blabel,W/2,by+10);
+    ctx.fillStyle='#fff'; ctx.fillText(blabel,W/2,by+10);
+    ctx.lineWidth=1; ctx.textAlign='left';
   }
 
   // Combo indicator
@@ -4184,17 +4362,28 @@ function drawLizard(){
 function drawMech(){
   const b=boss;
   if(b.dead&&b.deathTimer<=0) return;
-  const bx=b.x-cam.x, by=b.y-cam.y;
   ctx.save();
   if(b.dead) ctx.globalAlpha=Math.max(0,b.deathTimer/3);
   if(b.invTimer>0) ctx.globalAlpha=Math.sin(b.invTimer*20)>.0?1:0.4;
 
-  const mc=b.phase===2?'#880000':'#334455';
-  const lc=b.phase===2?'#cc2200':'#4466aa';
-  const ac=b.phase===2?'#660000':'#223344';
+  // The body below is laid out in absolute pixels for a MECH_W x MECH_H box, so
+  // it is drawn at design size and scaled about the feet. Anchoring at the feet
+  // is what keeps a shrunken Mech standing on the floor instead of hovering.
+  const s=b.shrink;
+  const fx=b.x+b.w/2-cam.x, fy=b.y+b.h-cam.y;
+  const bx=fx-MECH_W/2, by=fy-MECH_H;
+
+  const p3=b.phase===3;
+  const mc=p3?'#4d2a63':(b.phase===2?'#880000':'#334455');
+  const lc=p3?'#c07dff':(b.phase===2?'#cc2200':'#4466aa');
+  const ac=p3?'#301a3f':(b.phase===2?'#660000':'#223344');
+  const hot=p3?'#c07dff':(b.phase===2?'#ff2222':'#44aaff');
+
+  ctx.save();
+  if(s!==1){ ctx.translate(fx,fy); ctx.scale(s,s); ctx.translate(-fx,-fy); }
 
   // Legs
-  [[b.w*.25,130],[b.w*.75,130]].forEach(([lx,lh])=>{
+  [[MECH_W*.25,130],[MECH_W*.75,130]].forEach(([lx,lh])=>{
     ctx.fillStyle=ac; ctx.fillRect(bx+lx-14,by+lh,28,30);
     ctx.fillRect(bx+lx-18,by+lh+26,36,12);
     // Piston detail
@@ -4203,20 +4392,20 @@ function drawMech(){
 
   // Torso
   ctx.fillStyle=mc; ctx.strokeStyle=lc; ctx.lineWidth=2;
-  ctx.fillRect(bx+10,by+60,b.w-20,80); ctx.strokeRect(bx+10,by+60,b.w-20,80);
+  ctx.fillRect(bx+10,by+60,MECH_W-20,80); ctx.strokeRect(bx+10,by+60,MECH_W-20,80);
   // Panel lines
   ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1;
-  [20,40,60].forEach(ly=>ctx.strokeRect(bx+15,by+65+ly,b.w-30,18));
+  [20,40,60].forEach(ly=>ctx.strokeRect(bx+15,by+65+ly,MECH_W-30,18));
   // Energy core
-  const coreGlow=b.phase===2?`rgba(255,50,50,${.4+Math.sin(frameN*.1)*.3})`:`rgba(0,150,255,${.3+Math.sin(frameN*.08)*.2})`;
-  const coreGrd=ctx.createRadialGradient(bx+b.w/2,by+100,0,bx+b.w/2,by+100,28);
-  coreGrd.addColorStop(0,b.phase===2?'#ff8888':'#88ddff'); coreGrd.addColorStop(1,'transparent');
-  ctx.fillStyle=coreGrd; ctx.beginPath(); ctx.arc(bx+b.w/2,by+100,28,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle=b.phase===2?'#ff2222':'#44aaff'; ctx.beginPath(); ctx.arc(bx+b.w/2,by+100,14,0,Math.PI*2); ctx.fill();
+  const coreGlow=p3?`rgba(190,120,255,${.45+Math.sin(frameN*.13)*.3})`:(b.phase===2?`rgba(255,50,50,${.4+Math.sin(frameN*.1)*.3})`:`rgba(0,150,255,${.3+Math.sin(frameN*.08)*.2})`);
+  const coreGrd=ctx.createRadialGradient(bx+MECH_W/2,by+100,0,bx+MECH_W/2,by+100,28);
+  coreGrd.addColorStop(0,p3?'#e0baff':(b.phase===2?'#ff8888':'#88ddff')); coreGrd.addColorStop(1,'transparent');
+  ctx.fillStyle=coreGrd; ctx.beginPath(); ctx.arc(bx+MECH_W/2,by+100,28,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=hot; ctx.beginPath(); ctx.arc(bx+MECH_W/2,by+100,14,0,Math.PI*2); ctx.fill();
 
   // Arms
   const walk=Math.sin(b.walkCycle)*12;
-  [[b.w+8,75,b.w+48,95+walk],[-30,75,-70,95-walk]].forEach(([ax1,ay1,ax2,ay2])=>{
+  [[MECH_W+8,75,MECH_W+48,95+walk],[-30,75,-70,95-walk]].forEach(([ax1,ay1,ax2,ay2])=>{
     ctx.fillStyle=ac; ctx.strokeStyle=lc; ctx.lineWidth=2;
     const realAx1=bx+ax1, realAy1=by+ay1, realAx2=bx+ax2, realAy2=by+ay2;
     ctx.fillRect(realAx1-12,realAy1,24,45); ctx.strokeRect(realAx1-12,realAy1,24,45);
@@ -4227,21 +4416,24 @@ function drawMech(){
   });
 
   // Neck + head
-  ctx.fillStyle=ac; ctx.fillRect(bx+b.w/2-10,by+20,20,42);
+  ctx.fillStyle=ac; ctx.fillRect(bx+MECH_W/2-10,by+20,20,42);
   // Head (round)
   ctx.fillStyle=mc; ctx.strokeStyle=lc; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.ellipse(bx+b.w/2,by+20,38,32,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(bx+MECH_W/2,by+20,38,32,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
   // Visor
-  const vGrd=ctx.createLinearGradient(bx+b.w/2-28,by+10,bx+b.w/2+28,by+30);
-  vGrd.addColorStop(0,b.phase===2?'rgba(255,0,0,0.9)':'rgba(80,180,255,0.9)');
-  vGrd.addColorStop(1,b.phase===2?'rgba(180,0,0,0.9)':'rgba(0,80,200,0.9)');
-  ctx.fillStyle=vGrd; ctx.beginPath(); ctx.ellipse(bx+b.w/2,by+18,26,12,0,0,Math.PI*2); ctx.fill();
+  const vGrd=ctx.createLinearGradient(bx+MECH_W/2-28,by+10,bx+MECH_W/2+28,by+30);
+  vGrd.addColorStop(0,p3?'rgba(190,120,255,0.9)':(b.phase===2?'rgba(255,0,0,0.9)':'rgba(80,180,255,0.9)'));
+  vGrd.addColorStop(1,p3?'rgba(120,60,190,0.9)':(b.phase===2?'rgba(180,0,0,0.9)':'rgba(0,80,200,0.9)'));
+  ctx.fillStyle=vGrd; ctx.beginPath(); ctx.ellipse(bx+MECH_W/2,by+18,26,12,0,0,Math.PI*2); ctx.fill();
   // Visor reflection
-  ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.ellipse(bx+b.w/2-8,by+14,10,4,-.3,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.ellipse(bx+MECH_W/2-8,by+14,10,4,-.3,0,Math.PI*2); ctx.fill();
 
-  // Laser eyes
+  ctx.restore();   // end scaled body
+
+  // Laser eyes. Drawn outside the scale so the beam keeps its full reach — under
+  // the transform a 700px beam would shrink along with the Mech.
   if(b.laserActive){
-    const eyeX=bx+b.w/2, eyeY=by+18;
+    const eyeX=b.x+b.w/2-cam.x, eyeY=mechAnchorY(b,18)-cam.y;
     ctx.strokeStyle='rgba(255,50,50,0.9)'; ctx.lineWidth=3;
     const endX=eyeX+Math.cos(b.laserAngle)*700, endY=eyeY+Math.sin(b.laserAngle)*700;
     ctx.beginPath(); ctx.moveTo(eyeX,eyeY); ctx.lineTo(endX,endY); ctx.stroke();
@@ -4258,11 +4450,27 @@ function drawMech(){
     ctx.fillStyle='rgba(255,150,0,.5)'; ctx.beginPath(); ctx.ellipse(fx,fy2+12,10,6,0,0,Math.PI*2); ctx.fill();
   }
 
-  // Shockwaves
+  // Shockwaves, and the stomp column which carries its own height
   for(const sw of b.shockwaves){
     const sx=sw.x-cam.x;
+    if(sw.column){
+      const cg=ctx.createLinearGradient(0,sw.y-cam.y,0,sw.y+sw.h-cam.y);
+      cg.addColorStop(0,'rgba(255,180,60,0)');
+      cg.addColorStop(1,`rgba(255,120,0,${Math.min(0.75,sw.life*1.6)})`);
+      ctx.fillStyle=cg; ctx.fillRect(sx,sw.y-cam.y,sw.w,sw.h);
+      continue;
+    }
     ctx.fillStyle=`rgba(255,80,0,${Math.min(1,sw.life*.7)})`; ctx.fillRect(sx,GROUND_Y-18-cam.y,sw.w,18);
     ctx.fillStyle=`rgba(255,200,100,${Math.min(1,sw.life*.5)})`; ctx.fillRect(sx,GROUND_Y-18-cam.y,sw.w,4);
+  }
+
+  // Phase 2+ floor sweep
+  if(b.aiState==='SWEEP'){
+    const swx=b.sweepX-cam.x;
+    ctx.strokeStyle='rgba(255,90,90,0.9)'; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.moveTo(swx,mechAnchorY(b,18)-cam.y); ctx.lineTo(swx,GROUND_Y-cam.y); ctx.stroke();
+    ctx.fillStyle='rgba(255,160,120,0.5)';
+    ctx.fillRect(swx-16,GROUND_Y-10-cam.y,32,10);
   }
   ctx.restore();
 }
@@ -4548,6 +4756,21 @@ function starPath(cx,cy,outer,inner,rot){
     if(i) ctx.lineTo(x,y); else ctx.moveTo(x,y);
   }
   ctx.closePath();
+}
+
+function drawShrinkRay(){
+  if(!rayFx) return;
+  const a=Math.max(0,rayFx.life/0.22);
+  const x0=rayFx.x-cam.x, y0=rayFx.y-cam.y, x1=x0+rayFx.dir*640;
+  ctx.save();
+  ctx.globalAlpha=a;
+  ctx.strokeStyle='rgba(125,252,255,0.35)'; ctx.lineWidth=16;
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y0); ctx.stroke();
+  ctx.strokeStyle='#7dfcff'; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y0); ctx.stroke();
+  ctx.fillStyle='#eaffff';
+  ctx.beginPath(); ctx.arc(x0,y0,7*a,0,Math.PI*2); ctx.fill();
+  ctx.restore();
 }
 
 function drawPickups(){
@@ -5920,6 +6143,7 @@ function loop(ts){
   }
 
   drawBoss();
+  drawShrinkRay();
   drawProjectiles();
   drawPickups();
   drawParts();
