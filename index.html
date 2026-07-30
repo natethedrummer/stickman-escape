@@ -48,7 +48,15 @@ let musicGain = null;
 const MUSIC_VOL = 0.26;             // sits under the SFX on purpose
 let musicOn = (localStorage.getItem('pe_music') !== 'off');
 function initAC() {
-  if (!AC) AC = new (AudioContext || webkitAudioContext)();
+  // Via window, not bare identifiers: `AudioContext || webkitAudioContext` throws
+  // a ReferenceError instead of falling back when the unprefixed name is missing,
+  // and since initAC runs first inside the keydown handler, that throw used to
+  // take `keys[e.code]=true` with it and leave older iPads unable to play at all.
+  if (!AC) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return;                       // no Web Audio: run the game silently
+    AC = new Ctor();
+  }
   // Browsers start the context suspended until a gesture; every caller of initAC
   // is already inside one, so this is the right place to wake it.
   if (AC.state === 'suspended') AC.resume();
@@ -205,17 +213,29 @@ function mKick(t){
   g.gain.setValueAtTime(0.28,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.15);
   o.connect(g); g.connect(musicGain); o.start(t); o.stop(t+0.17);
 }
+// One shared noise buffer for the drums. Buffers are immutable and can back any
+// number of sources, and the hats fire several times a second for the whole
+// session — regenerating the samples each time was ~33KB/s of garbage for
+// identical content.
+const NOISE_SECS=0.5;
+let noiseBuf=null;
+function getNoiseBuf(){
+  if(noiseBuf) return noiseBuf;
+  const n=Math.ceil(AC.sampleRate*NOISE_SECS);
+  noiseBuf=AC.createBuffer(1,n,AC.sampleRate);
+  const d=noiseBuf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=Math.random()*2-1;
+  return noiseBuf;
+}
 function mNoise(t,dur,vol,hp){
   if(!AC||!musicGain) return;
-  const n=Math.ceil(AC.sampleRate*dur), buf=AC.createBuffer(1,n,AC.sampleRate);
-  const d=buf.getChannelData(0);
-  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1);
-  const s=AC.createBufferSource(); s.buffer=buf;
+  const s=AC.createBufferSource(); s.buffer=getNoiseBuf();
   const f=AC.createBiquadFilter(); f.type='highpass'; f.frequency.value=hp;
   const g=AC.createGain();
   g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
   s.connect(f); f.connect(g); g.connect(musicGain);
-  s.start(t); s.stop(t+dur);
+  // Start at a random offset so successive hits aren't bit-identical samples
+  s.start(t,Math.random()*Math.max(0,NOISE_SECS-dur)); s.stop(t+dur);
 }
 
 function musicStepAt(i,t,tr){

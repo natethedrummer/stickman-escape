@@ -13,6 +13,13 @@
   ([#15](https://github.com/natethedrummer/stickman-escape/issues/15))
 
 ### Fixed
+- iPad: the Web Audio setup no longer risks taking input down with it. `AudioContext ||
+  webkitAudioContext` throws a ReferenceError rather than falling back when the unprefixed name is
+  missing, and because initAC runs first inside the keydown handler that throw would also skip the
+  keypress — leaving an older iPad unable to play at all. The lookup goes through `window` now, and
+  the game runs silently if Web Audio is unavailable
+- The music drums share one pre-generated noise buffer instead of regenerating identical samples
+  several times a second, with a random read offset so hits still vary
 - iPad: on-screen controls now appear. Detection was `'ontouchstart' in window`, which iPadOS Safari
   does not expose in its default desktop-class browsing mode, so an iPad was treated as a desktop and
   shown no controls at all — unplayable without a keyboard. Detection now also accepts a coarse
