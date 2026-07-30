@@ -185,6 +185,105 @@ const TRACKS={
     hat: hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
     snare:hits("....x.......x.......x.......x...") },
 
+  // ── Per-boss themes ──────────────────────────────────────────────────────
+  // Keyed by boss *type*, so the Stickman Giant gets one theme for both the
+  // World 1 and World 2 mini-boss slots it fills. Each sits in or near its host
+  // world's key, so walking into the arena is a change of intensity rather than
+  // a change of place. `boss` above stays as the fallback for any type without
+  // an entry here.
+  boss_giant:{ bpm:120, wave:'square', bassWave:'square', lvol:0.11, bvol:0.19,
+    bass:seq("g1 . . . g1 . . . g1 . . . f1 . . . eb1 . . . eb1 . . . d1 . . . d1 . . ."),
+    lead:seq("g3 . . . bb3 . . . d4 . . . c4 . . . bb3 . . . . . . . a3 . . . g3 . . ."),
+    kick:hits("x...x...x...x...x...x...x...x..."),
+    hat: hits("..x...x...x...x...x...x...x...x."),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_anaconda:{ bpm:132, wave:'sawtooth', bassWave:'triangle', lvol:0.10, bvol:0.19,
+    bass:seq("g1 . g1 . g1 . g1 . ab1 . ab1 . g1 . . . bb1 . bb1 . a1 . a1 . g1 . g1 . g1 . . ."),
+    lead:seq("d4 . eb4 . e4 . f4 . g4 . f4 . e4 . eb4 . d4 . . . bb3 . c4 . d4 . eb4 . d4 . . ."),
+    kick:hits("x...x...x...x...x...x...x...x..."),
+    hat: hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_lizard:{ bpm:140, wave:'square', bassWave:'square', lvol:0.10, bvol:0.17,
+    bass:seq("d1 d1 . d1 . d1 d1 . d1 d1 . d1 . d1 . . f1 f1 . f1 . f1 f1 . e1 e1 . e1 . e1 . ."),
+    lead:seq("d4 . a3 . d4 . f4 . e4 . d4 . a3 . . . f4 . c4 . f4 . a4 . g4 . f4 . e4 . . ."),
+    kick:hits("x..x..x.x..x..x.x..x..x.x..x..x."),
+    hat: hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_frostwarden:{ bpm:112, wave:'sine', bassWave:'sine', lvol:0.16, bvol:0.17,
+    bass:seq("a1 . . . . . . . a1 . . . . . . . f1 . . . . . . . e1 . . . . . . ."),
+    lead:seq("e5 . . . a4 . . . c5 . . . b4 . . . a4 . . . c5 . . . b4 . . . e5 . . ."),
+    kick:hits("x.......x.......x.......x......."),
+    hat: hits("....x.......x.......x.......x..."),
+    snare:hits("................................") },
+
+  boss_yeti:{ bpm:128, wave:'triangle', bassWave:'triangle', lvol:0.13, bvol:0.22,
+    bass:seq("a1 . . . a1 . . . a1 . . . a1 . . . g1 . . . g1 . . . f1 . . . f1 . . ."),
+    lead:seq("a4 . . . e4 . . . a4 . c5 . b4 . . . g4 . . . d4 . . . f4 . . . e4 . . ."),
+    kick:hits("x...x..xx...x..xx...x..xx...x..x"),
+    hat: hits("..x...x...x...x...x...x...x...x."),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_foreman:{ bpm:144, wave:'square', bassWave:'square', lvol:0.09, bvol:0.16,
+    bass:seq("e1 e1 e1 . e1 e1 e1 . e1 e1 e1 . d1 d1 . . g1 g1 g1 . g1 g1 g1 . b1 b1 . b1 . b1 . ."),
+    lead:seq("e4 . g4 . b4 . g4 . e4 . d4 . b3 . . . g4 . b4 . d5 . b4 . a4 . g4 . e4 . . ."),
+    kick:hits("x...x...x...x...x...x...x...x..."),
+    hat: hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
+    snare:hits("..x.x...x.x.x...x.x.x...x.x.x...") },
+
+  boss_revenant:{ bpm:108, wave:'sawtooth', bassWave:'sine', lvol:0.10, bvol:0.22,
+    bass:seq("e1 . . . . . . . e1 . . . eb1 . . . d1 . . . . . . . c1 . . . b0 . . ."),
+    lead:seq("b3 . . . e4 . . . g4 . . . f#4 . . . e4 . . . . . . . d4 . . . b3 . . ."),
+    kick:hits("x.......x...x...x.......x...x..."),
+    hat: hits("........x...............x......."),
+    snare:hits("............x...............x...") },
+
+  boss_tunnelfiend:{ bpm:152, wave:'triangle', bassWave:'square', lvol:0.09, bvol:0.17,
+    bass:seq("c1 . c1 . c1 . c1 . c1 . c1 . bb0 . . . ab0 . ab0 . ab0 . ab0 . g0 . g0 . g0 . . ."),
+    lead:seq("c4 eb4 g4 eb4 c4 eb4 g4 c5 bb4 g4 eb4 c4 . . . . ab4 c5 eb5 c5 ab4 c5 eb5 ab5 g4 bb4 eb5 bb4 g4 . . ."),
+    kick:hits("x...x...x...x...x...x...x...x..."),
+    hat: hits("x.xxx.xxx.xxx.xxx.xxx.xxx.xxx.xx"),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_mole:{ bpm:136, wave:'square', bassWave:'sawtooth', lvol:0.10, bvol:0.16,
+    bass:seq("c1 c1 c1 c1 c1 c1 c1 c1 c1 c1 c1 c1 bb0 bb0 bb0 bb0 ab0 ab0 ab0 ab0 ab0 ab0 ab0 ab0 g0 g0 g0 g0 g0 g0 g0 g0"),
+    lead:seq("g4 . . . eb4 . . . c4 . . . g3 . . . ab4 . . . f4 . . . g4 . bb4 . c5 . . ."),
+    kick:hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
+    hat: hits("..x...x...x...x...x...x...x...x."),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_captain:{ bpm:124, wave:'square', bassWave:'triangle', lvol:0.11, bvol:0.19,
+    bass:seq("a1 . . . a1 . . . e1 . . . e1 . . . f1 . . . f1 . . . g1 . . . g1 . . ."),
+    lead:seq("a4 . a4 . c5 . b4 . a4 . . . e4 . . . f4 . f4 . a4 . g4 . f4 . . . e4 . . ."),
+    kick:hits("x...x...x...x...x...x...x...x..."),
+    hat: hits("..x...x...x...x...x...x...x...x."),
+    snare:hits("x.x.x...x.x.x...x.x.x...x.x.x...") },
+
+  boss_agent:{ bpm:146, wave:'sawtooth', bassWave:'square', lvol:0.09, bvol:0.17,
+    bass:seq("a1 . a1 a1 . a1 . a1 a1 . a1 a1 . a1 . . c2 . c2 c2 . c2 . c2 b1 . b1 b1 . b1 . ."),
+    lead:seq("a4 . c5 . e5 . c5 . b4 . a4 . e4 . . . f4 . a4 . c5 . a4 . g#4 . b4 . a4 . . ."),
+    kick:hits("x..x..x.x..x..x.x..x..x.x..x..x."),
+    hat: hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
+    snare:hits("....x.......x.......x.......x...") },
+
+  boss_mech:{ bpm:150, wave:'sawtooth', bassWave:'square', lvol:0.10, bvol:0.19,
+    bass:seq("d1 . d1 . d1 . d1 . d1 . d1 . c1 . c1 . bb0 . bb0 . bb0 . bb0 . a0 . a0 . a0 . g0 ."),
+    lead:seq("d5 . . . a4 . . . f5 . e5 . d5 . . . bb4 . . . f5 . . . e5 . d5 . a4 . . ."),
+    kick:hits("x...x...x...x...x...x...x...x..."),
+    hat: hits("x.xxx.xxx.xxx.xxx.xxx.xxx.xxx.xx"),
+    snare:hits("..x.x...x.x.x...x.x.x...x.x.x...") },
+
+  // The shrink finale is a different fight — Phil is hunting a fleeing Mech, so
+  // the theme goes up an octave and off the leash.
+  boss_mech_shrink:{ bpm:168, wave:'square', bassWave:'square', lvol:0.07, bvol:0.16,
+    bass:seq("d2 d2 d2 d2 d2 d2 d2 d2 c2 c2 c2 c2 c2 c2 c2 c2 bb1 bb1 bb1 bb1 bb1 bb1 bb1 bb1 a1 a1 a1 a1 a1 a1 a1 a1"),
+    lead:seq("d5 f5 a5 f5 d5 f5 a5 d6 c6 a5 f5 d5 . . . . bb5 d6 f6 d6 bb5 d6 f6 bb6 a5 c6 e6 c6 a5 . . ."),
+    kick:hits("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."),
+    hat: hits("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+    snare:hits("..x...x...x...x...x...x...x...x.") },
+
   secret:{ bpm:92, wave:'sine', bassWave:'triangle', lvol:0.15, bvol:0.18,
     bass:seq("f#1 . . . . . . . . . . . . . . . d1 . . . . . . . e1 . . . . . . ."),
     lead:seq("f#4 . a4 . c#5 . a4 . f#4 . . . e4 . . . d4 . f#4 . a4 . f#4 . e4 . . . . . . ."),
@@ -266,14 +365,27 @@ function setTrack(id){
   musicNextT=AC?AC.currentTime+0.06:0;
 }
 
+// The current boss's own theme, falling back to the generic one for any type
+// without an entry — so a new boss is playable before its music is written.
+function bossTrackId(){
+  if(!boss) return 'boss';
+  if(boss.type==='mech'&&boss.phase===3&&TRACKS.boss_mech_shrink) return 'boss_mech_shrink';
+  const id='boss_'+boss.type;
+  return TRACKS[id] ? id : 'boss';
+}
+
 // Which track the current game state calls for.
 function wantedTrack(){
   const s=G.screen;
   if(s==='GAME_OVER') return null;
-  if(s==='TITLE'||s==='MAP'||s==='WIN'||s==='RUSH_COMPLETE'||s==='CUTSCENE') return 'menu';
-  if(s==='BOSS_INTRO'||s==='FINAL_BOSS_INTRO') return 'boss';
+  if(s==='BOSS_INTRO'||s==='FINAL_BOSS_INTRO') return bossTrackId();
+  // A boss taunting Phil before the fight was scored with the title-screen
+  // jingle. The arena is already built by this point, so the boss's own theme is
+  // available to carry the cutscene into the fight.
+  if(s==='CUTSCENE') return (boss&&!boss.dead) ? bossTrackId() : 'menu';
+  if(s==='TITLE'||s==='MAP'||s==='WIN'||s==='RUSH_COMPLETE') return 'menu';
   if(secretRun) return 'secret';
-  if(boss&&!boss.dead) return 'boss';
+  if(boss&&!boss.dead) return bossTrackId();
   return TRACKS['w'+G.world] ? 'w'+G.world : 'w1';
 }
 

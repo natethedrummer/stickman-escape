@@ -3,6 +3,20 @@
 ## [Unreleased]
 
 ### Added
+- Every boss has its own music — 12 themes, one per boss type, each sitting in or near its host
+  world's key so entering the arena is a change of intensity rather than a change of place. Tempos run
+  108-168bpm across all four waveforms. The Giant Stickman Mech gets its own theme plus a faster,
+  higher variant for the shrink finale, since that phase is a different fight. Boss Rush now plays 12
+  different themes instead of the same loop twelve times. Unrecognised boss types fall back to the
+  original shared theme, so a new boss is playable before its music is written
+  ([#50](https://github.com/natethedrummer/stickman-escape/issues/50))
+
+### Fixed
+- The pre-boss story cutscenes played the title-screen jingle under a boss taunting Phil. They now
+  carry that boss's theme; cutscenes with no boss (the intro and ending) keep the menu track
+  ([#50](https://github.com/natethedrummer/stickman-escape/issues/50))
+
+### Added
 - Background music — nine looping tracks synthesised with Web Audio oscillators, no asset files. One
   per world with its own key, tempo and voice (ambient Forest, tense Desert, sparse Snow Peaks,
   industrial Factory 999, slow dark Mines, driving Berlin), plus a boss battle theme, an eerie theme
