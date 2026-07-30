@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- Background music — nine looping tracks synthesised with Web Audio oscillators, no asset files. One
+  per world with its own key, tempo and voice (ambient Forest, tense Desert, sparse Snow Peaks,
+  industrial Factory 999, slow dark Mines, driving Berlin), plus a boss battle theme, an eerie theme
+  for the secret stages, and a menu jingle. Tracks switch with the game state — boss fights and secret
+  areas take over, and the game-over screen falls silent. Music is on its own gain node so muting it
+  leaves the sound effects alone, and the setting persists. Toggle with **M** anywhere, or from the
+  new MUSIC row on the title screen and in the pause menu
+  ([#15](https://github.com/natethedrummer/stickman-escape/issues/15))
+
 ### Fixed
 - iPad: on-screen controls now appear. Detection was `'ontouchstart' in window`, which iPadOS Safari
   does not expose in its default desktop-class browsing mode, so an iPad was treated as a desktop and
