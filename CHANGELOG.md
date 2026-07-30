@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- Secret level select cheat — type `odlaw` (or ▲ ⚔ ▲ ⚔ on touch) during play to open a menu listing
+  all six secret levels, and jump straight into any of them without hunting for that world's key.
+  The stage looks and sounds like the world it belongs to wherever you jumped in from, and finishing
+  one returns you to the level you were on rather than advancing your progress. Cheated secrets score
+  500 and deliberately **don't** count towards Golden Phil, which still has to be earned by finding
+  all six keys ([#51](https://github.com/natethedrummer/stickman-escape/issues/51))
+
+### Fixed
+- The sword button had no cheat callback, so no touch code could ever use it
+  ([#51](https://github.com/natethedrummer/stickman-escape/issues/51))
+
+### Added
 - Every boss has its own music — 12 themes, one per boss type, each sitting in or near its host
   world's key so entering the arena is a change of intensity rather than a change of place. Tempos run
   108-168bpm across all four waveforms. The Giant Stickman Mech gets its own theme plus a faster,

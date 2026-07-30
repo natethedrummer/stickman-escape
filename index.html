@@ -418,10 +418,15 @@ const keys={}, touches={L:false,R:false,J:false,A:false,S:false,start:false};
 const hasTouchEvents='ontouchstart' in window;
 const isTouchDevice=hasTouchEvents||(window.matchMedia&&matchMedia('(pointer: coarse)').matches);
 const WORLD_CHEAT='xavier', MOBILE_WORLD_CHEAT='jjsjjsjjs', LEVEL_CHEAT='drum', MOBILE_LEVEL_CHEAT='sssjjj', WORLD_CHEAT_TIMEOUT=1400;
+// Secret-level picker. Mobile is ▲ ⚔ ▲ ⚔ — no code is a suffix of another, so
+// the three buffers sharing one input stream can't trigger each other.
+const SECRET_CHEAT='odlaw', MOBILE_SECRET_CHEAT='jaja';
 let worldCheatBuffer='', mobileWorldCheatBuffer='', worldCheatLastAt=0;
 let levelCheatBuffer='', mobileLevelCheatBuffer='', levelCheatLastAt=0;
+let secretCheatBuffer='', mobileSecretCheatBuffer='', secretCheatLastAt=0;
 function resetWorldCheat(){ worldCheatBuffer=''; mobileWorldCheatBuffer=''; worldCheatLastAt=0; }
 function resetLevelCheat(){ levelCheatBuffer=''; mobileLevelCheatBuffer=''; levelCheatLastAt=0; }
+function resetSecretCheat(){ secretCheatBuffer=''; mobileSecretCheatBuffer=''; secretCheatLastAt=0; }
 document.addEventListener('keydown',e=>{
   initAC(); keys[e.code]=true;
   if(['Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();
@@ -457,7 +462,9 @@ function bindT(id,p,onPress){ const el=document.getElementById(id);
   el.addEventListener('pointercancel',()=>touches[p]=false);
   el.addEventListener('pointerleave',()=>touches[p]=false); }
 if(isTouchDevice){ document.getElementById('touch').style.display='block';
-  bindT('tL','L');bindT('tR','R',()=>handleWorldCheatTouch('r'));bindT('tJ','J',()=>handleWorldCheatTouch('j'));bindT('tA','A');bindT('tS','S',()=>handleWorldCheatTouch('s')); }
+  bindT('tL','L');bindT('tR','R',()=>handleWorldCheatTouch('r'));bindT('tJ','J',()=>handleWorldCheatTouch('j'));
+  // The sword button had no cheat callback at all, so no code could use it
+  bindT('tA','A',()=>handleWorldCheatTouch('a'));bindT('tS','S',()=>handleWorldCheatTouch('s')); }
 
 // The move/jump/attack pad is a fixed overlay pinned to the bottom of the window.
 // In landscape — which is how anyone plays a 16:9 platformer on a phone — that
@@ -1378,10 +1385,15 @@ function startLevel(){
 // G.world/G.level deliberately stay pointed at the campaign level with the door,
 // so running out of lives drops the player back onto that level (the existing
 // GAME_OVER path calls startLevel) rather than stranding them in the secret.
-function startSecretLevel(){
-  const theme=SECRET_THEME[G.world];
-  secretRun={ theme, world:G.world, returnLevel:G.level };
-  levelData = genSecretLevel(G.world, theme);
+// `world` is the secret to play; it defaults to wherever Phil is, which is the
+// door case. The cheat picker passes an arbitrary one. G.world moves to the
+// target because the background, platforms and music all key off it — the stage
+// should look and sound like the world it belongs to, not the one you left.
+function startSecretLevel(world=G.world, opts={}){
+  const theme=SECRET_THEME[world];
+  secretRun={ theme, world, returnWorld:G.world, returnLevel:G.level, cheat:!!opts.cheat };
+  G.world=world;
+  levelData = genSecretLevel(world, theme);
   enemies   = spawnEnemies(levelData.enemies);
   projs     = [];
   pickups   = [];
@@ -1402,11 +1414,13 @@ function startSecretLevel(){
 function secretComplete(){
   const meta=SECRET_META[secretRun.theme];
   const first=!secretsFound.has(secretRun.world);
-  secretsFound.add(secretRun.world); saveSecrets();
+  // A secret reached by cheat is playable and scores, but doesn't count as found
+  // — Golden Phil still has to be earned by actually hunting the six keys.
+  if(!secretRun.cheat){ secretsFound.add(secretRun.world); saveSecrets(); }
   // Full prize the first time only, so a found secret can be replayed for fun
   // without turning into a score farm.
-  secretAward = addScore(first ? meta.bonus : 500);
-  secretGolden = checkGoldenUnlock();
+  secretAward = addScore((first&&!secretRun.cheat) ? meta.bonus : 500);
+  secretGolden = secretRun.cheat ? false : checkGoldenUnlock();
   G.lives=3; phil.health=5.0;
   SFX.win();
   burst(levelData.flagX,levelData.flagY-20,'#ffd54a',20,150,0);
@@ -1416,9 +1430,15 @@ function secretComplete(){
 function leaveSecret(){
   const ret=secretRun;
   secretRun=null; gravMul=1;
-  G.world=ret.world; G.level=ret.returnLevel;
+  G.world=ret.returnWorld; G.level=ret.returnLevel;
+  if(ret.cheat){
+    // Never advance the campaign through a level that wasn't played — the cheat
+    // drops you back onto the level you jumped in from.
+    startLevel();
+    return;
+  }
   // Leaving through the door clears that campaign level, so it earns a best too
-  recordBest(ret.world,ret.returnLevel,G.score-levelStartScore);
+  recordBest(ret.returnWorld,ret.returnLevel,G.score-levelStartScore);
   nextLevel();                    // the door counted as clearing that level
 }
 
@@ -1510,6 +1530,19 @@ function handleWorldCheatInput(key){
     useWorldCheat();
   }
 }
+function handleSecretCheatInput(key){
+  if(!canUseWorldCheat()){ resetSecretCheat(); return; }
+  const now=performance.now();
+  if(now-secretCheatLastAt>WORLD_CHEAT_TIMEOUT) resetSecretCheat();
+  secretCheatLastAt=now;
+  secretCheatBuffer=(secretCheatBuffer+key).slice(-SECRET_CHEAT.length);
+  mobileSecretCheatBuffer=(mobileSecretCheatBuffer+key).slice(-MOBILE_SECRET_CHEAT.length);
+  if(secretCheatBuffer===SECRET_CHEAT||mobileSecretCheatBuffer===MOBILE_SECRET_CHEAT){
+    resetSecretCheat();
+    openSecretPicker();
+  }
+}
+
 function handleLevelCheatInput(key){
   if(!canUseWorldCheat()){ resetLevelCheat(); return; }
   const now=performance.now();
@@ -1528,10 +1561,12 @@ function handleWorldCheatKey(e){
   if(key<'a'||key>'z') return;
   handleWorldCheatInput(key);
   handleLevelCheatInput(key);
+  handleSecretCheatInput(key);
 }
 function handleWorldCheatTouch(key){
   handleWorldCheatInput(key);
   handleLevelCheatInput(key);
+  handleSecretCheatInput(key);
 }
 function restoreWorldCheatState(keep){
   G.score=keep.score;
@@ -5180,6 +5215,111 @@ function drawPickups(){
 
 // ── SCREEN OVERLAYS ──
 // ══════════════════════════════════════════════════════
+//  SECRET PICKER  (odlaw cheat)
+// ══════════════════════════════════════════════════════
+// All six are selectable whether or not their key has been found — that is the
+// whole point of the cheat. Built with tap support from the start, since the
+// mobile code (▲ ⚔ ▲ ⚔) means phone players are the ones most likely to use it.
+let pickSel=0, pickKeyHeld=false;
+const pickWorlds = ()=>Object.keys(SECRET_LEVEL).map(Number).sort((a,b)=>a-b);
+const pickRows = ()=>pickWorlds().length+1;          // + a BACK row
+function pickBox(i){ return { x:W/2-210, y:150+i*44, w:420, h:36 }; }
+
+function openSecretPicker(){
+  initAC();
+  pickSel=0; pickKeyHeld=true;      // the key that opened this is still down
+  G.screen='SECRET_PICK';
+  SFX.clear();
+}
+function closeSecretPicker(){
+  pickKeyHeld=true;
+  G.screen='PLAYING';
+  SFX.pickup();
+}
+function pickActivate(){
+  const ws=pickWorlds();
+  if(pickSel>=ws.length){ closeSecretPicker(); return; }
+  startSecretLevel(ws[pickSel],{cheat:true});
+}
+
+function handleSecretPickInput(){
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const go=keys['Enter']||keys['Space'], back=keys['Escape'];
+  const n=pickRows();
+  if(up||down||go||back){
+    if(!pickKeyHeld){
+      pickKeyHeld=true;
+      if(back) closeSecretPicker();
+      else if(go) pickActivate();
+      else if(down){ pickSel=(pickSel+1)%n; SFX.pickup(); }
+      else if(up){ pickSel=(pickSel+n-1)%n; SFX.pickup(); }
+    }
+  } else pickKeyHeld=false;
+
+  if(tapPoint){
+    // Nearest row, same as the title — a 36px row is ~25 CSS px on a phone
+    const first=pickBox(0), last=pickBox(n-1);
+    if(tapPoint.x>first.x-24&&tapPoint.x<first.x+first.w+24&&
+       tapPoint.y>first.y-12&&tapPoint.y<last.y+last.h+12){
+      let best=0, bestD=Infinity;
+      for(let i=0;i<n;i++){
+        const b=pickBox(i), d=Math.abs(tapPoint.y-(b.y+b.h/2));
+        if(d<bestD){ bestD=d; best=i; }
+      }
+      pickSel=best; tapPoint=null; pickActivate(); return;
+    }
+    tapPoint=null;
+  }
+}
+
+function drawSecretPicker(){
+  ctx.fillStyle='rgba(4,6,12,0.88)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#ffd54a'; ctx.shadowBlur=14;
+  ctx.fillStyle='#ffe89a'; ctx.font='bold 26px monospace';
+  ctx.fillText('★  SECRET LEVEL SELECT  ★',W/2,96);
+  ctx.restore();
+  ctx.fillStyle='#8a8256'; ctx.font='11px monospace';
+  ctx.fillText('odlaw',W/2,118);
+
+  const ws=pickWorlds();
+  for(let i=0;i<pickRows();i++){
+    const b=pickBox(i), sel=(i===pickSel);
+    const isBack=(i>=ws.length);
+    ctx.fillStyle=sel?'rgba(120,90,20,0.55)':'rgba(0,0,0,0.35)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle=sel?'#ffd54a':'#4a4636'; ctx.lineWidth=2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+
+    if(isBack){
+      ctx.fillStyle=sel?'#ffffff':'#9a9276'; ctx.font='bold 15px monospace';
+      ctx.fillText('BACK TO THE LEVEL',W/2,b.y+24);
+    } else {
+      const w=ws[i], meta=SECRET_META[SECRET_THEME[w]];
+      ctx.textAlign='left';
+      ctx.fillStyle=sel?'#ffffff':'#c8bf94'; ctx.font='bold 15px monospace';
+      ctx.fillText(`WORLD ${w}  ·  ${WORLDS[w].name}`,b.x+14,b.y+16);
+      ctx.fillStyle=sel?'#ffe89a':'#8a8256'; ctx.font='11px monospace';
+      ctx.fillText(meta.name+' — '+meta.blurb,b.x+14,b.y+30);
+      ctx.textAlign='right';
+      ctx.fillStyle=secretsFound.has(w)?'#7fd06a':'#6a6450'; ctx.font='bold 11px monospace';
+      ctx.fillText(secretsFound.has(w)?'FOUND':'NOT FOUND',b.x+b.w-14,b.y+22);
+      ctx.textAlign='center';
+    }
+    if(sel&&Math.sin(frameN*.12)>0){
+      ctx.fillStyle='#ffd54a'; ctx.font='bold 15px monospace';
+      ctx.fillText('>',b.x-14,b.y+24); ctx.fillText('<',b.x+b.w+14,b.y+24);
+    }
+  }
+  ctx.fillStyle='#6a6450'; ctx.font='11px monospace';
+  ctx.fillText('Cheating in a secret does not count towards Golden Phil',W/2,H-40);
+  ctx.fillStyle='#445544';
+  ctx.fillText(isTouchDevice?'Tap a row':'Arrows/WASD: Select   Enter: Play   Esc: Back',W/2,H-22);
+  ctx.textAlign='left';
+}
+
+// ══════════════════════════════════════════════════════
 //  WORLD MAP
 // ══════════════════════════════════════════════════════
 // One world on screen at a time rather than all 60 nodes at once — at this canvas
@@ -6423,6 +6563,11 @@ function loop(ts){
   // --- TITLE ---
   if(G.screen==='TITLE'){ drawTitle(); handleTitleInput(); return; }
   if(G.screen==='MAP'){ updateMap(dt); drawMap(); handleMapInput(); return; }
+  // Drawn over the frozen level it was opened from, so you can see where you are
+  if(G.screen==='SECRET_PICK'){
+    drawBackground(); drawPlatforms(); drawDecorations(); drawHUD();
+    drawSecretPicker(); handleSecretPickInput(); return;
+  }
   // --- BOSS RUSH COMPLETE ---
   if(G.screen==='RUSH_COMPLETE'){ drawRushComplete(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.mode='CAMPAIGN'; G.screen='TITLE'; } return; }
   // --- CUTSCENE ---

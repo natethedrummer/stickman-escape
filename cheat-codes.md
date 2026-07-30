@@ -38,6 +38,27 @@ This document lists all available cheat codes in Phil's Escape. Cheat codes can 
 
 ---
 
+## Secret Level Select
+
+**What it does:** Opens a menu listing all six secret levels, so you can play any of them without finding that world's key and door.
+
+| Platform | Input |
+|----------|-------|
+| **Keyboard** | `O` `D` `L` `A` `W` (type quickly) |
+| **Mobile/Touch** | ▲ ⚔ ▲ ⚔ |
+
+**Notes:**
+- Each button press must be entered within **1.4 seconds** of the previous one, or the code resets
+- All six are selectable whether or not you have found their key
+- The stage looks and sounds like the world it belongs to, wherever you jumped in from
+- Finishing one returns you to the level you were on — it does not advance your progress
+- Cheated secrets score 500 points and **do not** count towards the Golden Phil skin, which still has
+  to be earned by finding all six keys properly
+- `BACK TO THE LEVEL` (or Escape) closes the menu without playing anything
+- For mobile: Jump button is ▲, Sword button is ⚔
+
+---
+
 ## Usage Tips
 
 - **Timing matters:** All button presses must happen quickly (within 1.4 seconds total) or the cheat resets
