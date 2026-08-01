@@ -108,6 +108,12 @@ const SFX = {
   power:   ()=>{ [784,1047,1319,1568].forEach((f,i)=>setTimeout(()=>tone(f,0.09,0.14,'triangle'),i*55)); },
   powerEnd:()=>{ tone(660,0.07,0.12,'sine',330); },
   starHit: ()=>tone(1200,0.06,0.07,'triangle',1800),
+  rocket:  ()=>{ noise(0.14,0.28); tone(220,0.09,0.3,'sawtooth',900); },
+  boom:    ()=>{ noise(0.32,0.32); tone(90,0.16,0.3,'sawtooth',40); },
+  whoosh:  ()=>tone(520,0.07,0.16,'triangle',300),
+  smash:   ()=>{ noise(0.26,0.14); tone(110,0.14,0.2,'square',60); },
+  buy:     ()=>{ [784,1047,1319].forEach((f,i)=>setTimeout(()=>tone(f,0.11,0.16,'square'),i*80)); },
+  broke:   ()=>{ tone(200,0.12,0.14,'square',120); setTimeout(()=>tone(150,0.12,0.2,'square',90),120); },
 };
 
 // ══════════════════════════════════════════════════════
@@ -1277,6 +1283,7 @@ let hasKey = false;                 // picked up the secret key on this level
 let secretRun = null;               // {theme, world, returnLevel} while inside a secret level
 let secretIntroTimer = 0, secretAward = 0, secretGolden = false;
 let levelStartScore = 0;            // score when the level began; the map shows the difference
+let lastCoinAward = 0;              // coins the clear screen should call out
 // The shrink ray is a property of the final fight, not of Phil — keeping it out
 // of initPhil means dying and respawning mid-finale doesn't take it away.
 let hasRay = false, rayCD = 0, rayFx = null;
@@ -1284,6 +1291,7 @@ const RAY_CD = 0.85;
 const BOUNCE_V = -520;              // launch speed off every landing in the springs stage
 let mechFinalTriggered = false;
 let paused = false, pauseSelect = 0, pauseKeyHeld = false;
+let swapKeyHeld = false;            // edge-trigger for the weapon-switch key
 let combo = 0, comboTimer = 0;
 const COMBO_WINDOW = 3.0, COMBO_MAX = 10;
 
@@ -1307,6 +1315,85 @@ const SPEED_RUN = 330, SPEED_JUMP = -690;   // boosted; normals are 240 / -620
 function starActive(){ return !!phil && phil.starT>0; }
 function scoreMult(){ return (phil && phil.multT>0) ? 2 : 1; }
 
+// ══════════════════════════════════════════════════════
+//  WEAPONS + THE SHOP
+// ══════════════════════════════════════════════════════
+// Coins are a second currency alongside score, and deliberately not spendable
+// score: score is the high-score ladder and gets wiped by every new run, while
+// what you bought has to survive one. They live in their own store for the same
+// reason `pe_progress` does — NEW GAME must not take the bazooka away.
+//
+// A melee weapon drives the existing swing (range/dmg/dur/cd replace the ATK_*
+// constants); a `ranged` one calls fireWeapon instead and never sets
+// phil.attacking, so the thrust pose and its hit box stay melee-only.
+const WEAPONS = {
+  sword: { name:'SWORD', price:0, color:'#c8eeff', melee:true,
+    dmg:1, range:ATK_RANGE, dur:ATK_DUR, cd:ATK_CD,
+    blurb:'Quick and always yours.',
+    stats:['Damage 1','Fast swing','Free forever'] },
+  hammer: { name:'HAMMER', price:200, color:'#d8a05a', melee:true,
+    dmg:3, range:52, dur:0.34, cd:0.66, breaksGuard:true,
+    blurb:'Slow, but it SMASHES shields.',
+    stats:['Damage 3','Slow swing','Breaks Heavy guards'] },
+  boomerang: { name:'BOOMERANG', price:350, color:'#8fe08a', ranged:true, cd:0.35,
+    dmg:1,
+    blurb:'Throw it. It comes back. Hits both ways.',
+    stats:['Damage 1 each way','Flies through walls','One in the air at a time'] },
+  bazooka: { name:'BAZOOKA', price:500, color:'#ff9a4a', ranged:true, cd:0.85,
+    dmg:2, radius:78, ammoMax:6,
+    blurb:'BOOM. Blows up a whole crowd.',
+    stats:['Damage 2 in a blast','6 rockets per life','Refills when you respawn'] },
+};
+const WEAPON_ORDER = ['sword','hammer','boomerang','bazooka'];
+
+// Coin values. Tuned so world 1 pays for the hammer around its midpoint and the
+// bazooka by the time you leave it: ~16/level from kills, +20 a level, +50 a boss.
+const COIN_KILL = 2, COIN_KILL_HEAVY = 4, COIN_LEVEL = 20, COIN_BOSS = 50, COIN_SECRET = 40;
+
+const SHOP_KEY = 'pe_shop';
+function loadShop(){
+  try{
+    const s=JSON.parse(localStorage.getItem(SHOP_KEY));
+    if(s&&typeof s==='object'){
+      const owned=new Set((s.owned||[]).filter(w=>WEAPONS[w]));
+      owned.add('sword');                        // the sword is never not owned
+      const eq=WEAPONS[s.equipped]&&owned.has(s.equipped)?s.equipped:'sword';
+      return { coins:Math.max(0,s.coins|0), owned, equipped:eq };
+    }
+  }catch(e){}
+  return { coins:0, owned:new Set(['sword']), equipped:'sword' };
+}
+let shop = loadShop();
+function saveShop(){
+  try{ localStorage.setItem(SHOP_KEY,JSON.stringify({
+    coins:shop.coins, owned:[...shop.owned], equipped:shop.equipped })); }catch(e){}
+}
+function curWeapon(){ return WEAPONS[shop.equipped]||WEAPONS.sword; }
+function ownedWeapons(){ return WEAPON_ORDER.filter(w=>shop.owned.has(w)); }
+
+// Banked the moment they are picked up, so closing the tab — or dying — never
+// costs the player coins they have already collected.
+function addCoins(n){
+  if(n<=0) return 0;
+  shop.coins+=n; saveShop();
+  return n;
+}
+
+// Switching mid-level is free and instant — the swing timer is deliberately not
+// reset, so cycling past a weapon you don't want costs nothing.
+function equipWeapon(id){
+  if(!WEAPONS[id]||!shop.owned.has(id)) return;
+  shop.equipped=id; saveShop();
+}
+function cycleWeapon(dir){
+  const own=ownedWeapons();
+  if(own.length<2) return;
+  let i=own.indexOf(shop.equipped); if(i<0) i=0;
+  equipWeapon(own[(i+dir+own.length)%own.length]);
+  SFX.pickup();
+  if(phil&&!phil.dead) scorePopup(phil.x+phil.w/2,phil.y-14,curWeapon().name,curWeapon().color);
+}
+
 // Every score award funnels through here so the ×2 power-up needs exactly one
 // hook. Returns the points actually granted, for the popup text.
 function addScore(base){
@@ -1322,7 +1409,10 @@ function initPhil(sx,sy){
     walkCycle:0, jumpBuffer:0,
     attacking:false, atkTimer:0, atkCD:0, attackedSet:new Set(),
     shielding:false, dead:false, deathTimer:0, invTimer:2.0,
-    starT:0, speedT:0, multT:0, starHitT:0, auraPhase:0 };
+    starT:0, speedT:0, multT:0, starHitT:0, auraPhase:0,
+    // Rockets are per-life, not per-purchase — respawning rebuilds phil, so a
+    // death hands them all back rather than leaving a dud weapon equipped.
+    ammo:WEAPONS.bazooka.ammoMax, boomOut:false, fireFx:0 };
 }
 
 function spawnEnemies(defs){
@@ -1420,6 +1510,7 @@ function secretComplete(){
   // Full prize the first time only, so a found secret can be replayed for fun
   // without turning into a score farm.
   secretAward = addScore((first&&!secretRun.cheat) ? meta.bonus : 500);
+  lastCoinAward = addCoins(COIN_SECRET);
   secretGolden = secretRun.cheat ? false : checkGoldenUnlock();
   G.lives=3; phil.health=5.0;
   SFX.win();
@@ -1493,6 +1584,7 @@ function applyRushScaling(){
 
 function rushBossCleared(){
   rush.cleared++;
+  lastCoinAward=addCoins(COIN_BOSS);                // Boss Rush pays for weapons too
   phil.health=Math.min(5.0,phil.health+1.5);        // heal between fights (playtested: 1.0 was a touch harsh)
   for(const id of SKIN_ORDER){
     const s=SKINS[id];
@@ -1674,11 +1766,16 @@ function updatePhil(dt){
   // sword, so the finale doesn't ask the player to learn a new key at the climax
   if(rayCD>0) rayCD-=dt;
   if(rayFx){ rayFx.life-=dt; if(rayFx.life<=0) rayFx=null; }
+  const wep=curWeapon();
+  if(phil.fireFx>0) phil.fireFx-=dt;
   if(hasRay){
     if(In.atk()&&rayCD<=0&&!shielding){ fireShrinkRay(); rayCD=RAY_CD; }
+  } else if(wep.ranged){
+    if(In.atk()&&phil.atkCD<=0&&!shielding) fireWeapon(wep);
   } else if(In.atk()&&phil.atkCD<=0&&!shielding){
-    phil.attacking=true; phil.atkTimer=ATK_DUR; phil.atkCD=ATK_CD;
-    phil.attackedSet.clear(); SFX.atk();
+    phil.attacking=true; phil.atkTimer=wep.dur; phil.atkCD=wep.cd;
+    phil.attackedSet.clear();
+    if(wep===WEAPONS.hammer) SFX.smash(); else SFX.atk();
   }
   if(phil.atkTimer>0) phil.atkTimer-=dt; else phil.attacking=false;
   if(phil.atkCD>0) phil.atkCD-=dt;
@@ -1702,18 +1799,23 @@ function updatePhil(dt){
 
   // Attack hit check
   if(phil.attacking){
-    const ax = phil.facingR ? phil.x+phil.w : phil.x-ATK_RANGE;
-    const atkBox={x:ax,y:phil.y+8,w:ATK_RANGE,h:28};
+    const rng=wep.range||ATK_RANGE;
+    const ax = phil.facingR ? phil.x+phil.w : phil.x-rng;
+    const atkBox={x:ax,y:phil.y+8,w:rng,h:28};
     // Hit enemies
     for(const e of enemies){
       if(!e.dead&&!phil.attackedSet.has(e)&&overlap(atkBox,e)){
         phil.attackedSet.add(e);
         if(e.type==='glider'&&phil.onGround) continue;
+        // The hammer's whole point is that a raised shield stops mattering
         if(isHeavyFrontGuarding(e)){
-          burst((phil.facingR?e.x:e.x+e.w),e.y+e.h*0.45,'#88ccff',6,70,0); SFX.block();
-          continue;
+          if(!wep.breaksGuard){
+            burst((phil.facingR?e.x:e.x+e.w),e.y+e.h*0.45,'#88ccff',6,70,0); SFX.block();
+            continue;
+          }
+          burst((phil.facingR?e.x:e.x+e.w),e.y+e.h*0.45,'#ffcc66',12,140,120);
         }
-        hitEnemy(e,1);
+        hitEnemy(e,wep.dmg||1);
       }
     }
     // Destroy bombs mid-air
@@ -1724,7 +1826,7 @@ function updatePhil(dt){
     }
     // Hit boss
     if(boss&&!boss.dead&&!phil.attackedSet.has(boss)&&overlapBoss(atkBox)){
-      phil.attackedSet.add(boss); hitBoss(1, atkBox);
+      phil.attackedSet.add(boss); hitBoss(wep.dmg||1, atkBox);
     }
   }
 
@@ -1869,6 +1971,7 @@ function respawnPhil(){
 
 function levelComplete(){
   addScore(500); SFX.clear();
+  lastCoinAward=addCoins(levelData.isBoss?COIN_BOSS:COIN_LEVEL);
   // Points earned in this level, not the running campaign total — that's the only
   // figure that means anything when you replay a level from the map.
   if(G.mode==='CAMPAIGN') recordBest(G.world,G.level,G.score-levelStartScore);
@@ -2147,10 +2250,46 @@ function applyPowerup(p){
   SFX.power();
 }
 
+// ── COINS ──
+// Coins pop out of a dead enemy and then home in on Phil rather than dropping to
+// the ground and waiting there. Homing is not a nicety: a coin that landed
+// normally would need its own gravity and platform collision, and any coin that
+// popped over a pit would fall out of the level and be lost through no fault of
+// the player. Flying to Phil means every coin earned is a coin collected.
+const COIN_POP = 0.32;                 // seconds of arc before the magnet takes over
+function spawnCoins(x,y,n){
+  for(let i=0;i<n;i++){
+    const a=-Math.PI/2+(Math.random()-0.5)*1.5;
+    pickups.push({ type:'coin', x:x-7, y:y-7, w:14, h:14,
+      vx:Math.cos(a)*(90+Math.random()*70), vy:Math.sin(a)*(150+Math.random()*90),
+      t:-i*0.045, spin:Math.random()*Math.PI*2, bob:0, dead:false });
+  }
+}
+
+function updateCoin(p,dt){
+  p.t+=dt; p.spin+=dt*7;
+  if(p.t<=0) return;                                    // staggered spawn delay
+  if(p.t<COIN_POP||phil.dead){
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=1100*dt;
+    if(p.y>H+200) p.dead=true;                          // only reachable while Phil is dead
+    return;
+  }
+  const cx=phil.x+phil.w/2, cy=phil.y+phil.h/2;
+  const dx=cx-(p.x+7), dy=cy-(p.y+7), d=Math.hypot(dx,dy)||1;
+  const spd=Math.min(900,320+(p.t-COIN_POP)*900);
+  p.x+=dx/d*spd*dt; p.y+=dy/d*spd*dt;
+  if(d<18){
+    p.dead=true;
+    addCoins(1); SFX.coin();
+    part({x:p.x+7,y:p.y+7,vx:0,vy:-40,color:'#ffd700',sz:4,dec:2.5,grav:0});
+  }
+}
+
 function updatePickups(dt){
   for(let i=pickups.length-1;i>=0;i--){
     const p=pickups[i];
     if(p.dead){ pickups.splice(i,1); continue; }
+    if(p.type==='coin'){ updateCoin(p,dt); continue; }
     p.bob+=dt*4;
     if(phil.dead||!overlap(phil,p)) continue;
     // A heart on a full health bar is left on the ground to come back for.
@@ -2283,6 +2422,7 @@ function hitEnemy(e, dmg){
     scorePopup(e.x+e.w/2,e.y-20,popTxt,popCol);
     if(combo>=3){ burst(e.x+e.w/2,e.y+e.h/2,combo>=5?'#ff88ff':'#ffaa00',16,150,300); SFX.coin(); }
     burst(e.x+e.w/2,e.y+e.h/2,'#ff4422',14,130,350); SFX.die();
+    spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
     if(e.type==='heavy'&&Math.random()<0.5) spawnHealthPickup(e);
   }
 }
@@ -2319,6 +2459,104 @@ function explodeBomb(p){
 }
 
 // ══════════════════════════════════════════════════════
+//  PLAYER WEAPONS — ROCKETS AND THE BOOMERANG
+// ══════════════════════════════════════════════════════
+// Both live in the same `projs` array as enemy fire, told apart by `hostile`.
+// Nothing Phil throws can hurt Phil: a rocket blast that chipped him would turn
+// the bazooka into a trap, and this is a game for an eight-year-old.
+function fireWeapon(wep){
+  const dir=phil.facingR?1:-1;
+  const mx=phil.x+phil.w/2+dir*16, my=phil.y+18;
+  if(wep===WEAPONS.bazooka){
+    if(phil.ammo<=0){
+      SFX.broke(); scorePopup(phil.x+phil.w/2,phil.y-10,'NO ROCKETS','#ff8866');
+      phil.atkCD=0.45;                       // don't let the buzzer machine-gun
+      return;
+    }
+    phil.ammo--;
+    projs.push({ type:'rocket', hostile:false, x:mx, y:my, w:16, h:8,
+      vx:dir*560, vy:-40, grav:150, dir, dead:false, radius:wep.radius, life:0 });
+    burst(mx,my,'#ffcc88',8,120,0);
+    phil.vx-=dir*70;                         // a little kick back
+    SFX.rocket();
+  } else {
+    if(phil.boomOut) return;                 // one in the air at a time
+    phil.boomOut=true;
+    // 620 decaying at 0.28/s over BOOM_OUT reaches ~230px — past an archer's
+    // 200px detection range, so it can be opened with rather than answered with
+    projs.push({ type:'boomerang', hostile:false, x:mx-8, y:my-8, w:16, h:16,
+      vx:dir*620, vy:0, dir, dead:false, phase:'out', life:0, spin:0, hitSet:new Set() });
+    SFX.whoosh();
+  }
+  phil.atkCD=wep.cd;
+  phil.fireFx=0.16;
+}
+
+function explodeRocket(p){
+  if(p.dead) return;
+  p.dead=true; shake=Math.max(shake,0.6); SFX.boom();
+  burst(p.x,p.y,'#ffaa44',22,220,120);
+  burst(p.x,p.y,'#ffe9a8',12,110,0);
+  const dmg=WEAPONS.bazooka.dmg;
+  for(const e of enemies){
+    if(e.dead) continue;
+    if(Math.hypot((e.x+e.w/2)-p.x,(e.y+e.h/2)-p.y)>p.radius) continue;
+    hitEnemy(e,dmg);                          // a blast ignores raised shields
+  }
+  const focus=getBossFocusBox();
+  if(boss&&!boss.dead&&focus){
+    // Nearest point on the boss box, so a blast beside a huge Mech still counts
+    const nx=Math.max(focus.x,Math.min(p.x,focus.x+focus.w));
+    const ny=Math.max(focus.y,Math.min(p.y,focus.y+focus.h));
+    if(Math.hypot(nx-p.x,ny-p.y)<=p.radius) hitBoss(dmg,{x:p.x-p.radius,y:p.y-p.radius,w:p.radius*2,h:p.radius*2});
+  }
+  // Clear enemy fire caught in the blast — a rocket visibly ought to
+  for(const q of projs){
+    if(q.dead||!q.hostile) continue;
+    if(Math.hypot(q.x-p.x,q.y-p.y)<=p.radius){ q.dead=true; burst(q.x,q.y,'#ffd27a',6,80,20); }
+  }
+}
+
+// p.x/p.y are the rocket's centre — that is where it is drawn and where the
+// blast is measured from, so the hit box has to be built around it rather than
+// treating p.x as a corner the way the generic projectile code does.
+function updateRocket(p,dt){
+  p.life+=dt;
+  const box={x:p.x-8,y:p.y-4,w:16,h:8};
+  if(Math.random()<0.7) part({x:p.x-p.dir*8,y:p.y+2,vx:-p.dir*30,vy:-10,color:Math.random()<.5?'#ffbb66':'#888',sz:3+Math.random()*3,dec:3.5,grav:-40});
+  for(const e of enemies){ if(!e.dead&&overlap(box,e)){ explodeRocket(p); return; } }
+  if(boss&&!boss.dead&&overlapBoss(box)){ explodeRocket(p); return; }
+  for(const pl of levelData.plats){ if(overlap(box,pl)){ explodeRocket(p); return; } }
+  if(p.life>2.5) explodeRocket(p);
+}
+
+const BOOM_OUT = 0.5;                         // seconds before it turns around
+function updateBoomerang(p,dt){
+  p.life+=dt; p.spin+=dt*22;
+  if(p.phase==='out'){
+    p.vx*=Math.pow(0.28,dt);                  // slows to a stop, then comes home
+    if(p.life>=BOOM_OUT){ p.phase='back'; p.hitSet.clear(); }
+  } else {
+    const cx=phil.x+phil.w/2, cy=phil.y+phil.h/2;
+    const dx=cx-(p.x+8), dy=cy-(p.y+8), d=Math.hypot(dx,dy)||1;
+    const spd=Math.min(760,320+(p.life-BOOM_OUT)*680);
+    p.vx=dx/d*spd; p.vy=dy/d*spd;
+    // Caught — or given up on, if Phil died while it was in the air
+    if(d<22||phil.dead||p.life>4){ p.dead=true; phil.boomOut=false; if(d<22&&!phil.dead) SFX.whoosh(); return; }
+  }
+  const dmg=WEAPONS.boomerang.dmg;
+  for(const e of enemies){
+    if(e.dead||p.hitSet.has(e)||!overlap(p,e)) continue;
+    p.hitSet.add(e);
+    if(isHeavyFrontGuarding(e)){ burst(p.x+8,p.y+8,'#88ccff',6,70,0); SFX.block(); continue; }
+    hitEnemy(e,dmg);
+  }
+  if(boss&&!boss.dead&&!p.hitSet.has(boss)&&overlapBoss(p)){
+    p.hitSet.add(boss); hitBoss(dmg,{x:p.x,y:p.y,w:p.w,h:p.h});
+  }
+}
+
+// ══════════════════════════════════════════════════════
 //  PROJECTILES
 // ══════════════════════════════════════════════════════
 function updateProjs(dt){
@@ -2327,7 +2565,20 @@ function updateProjs(dt){
     if(p.dead){projs.splice(i,1);continue;}
     p.x+=p.vx*dt; p.y+=p.vy*dt; if(p.grav)p.vy+=p.grav*dt;
     if(p.type==='bomb') p.rot+=(p.vx>=0?1:-1)*dt*8;
-    if(p.y>H+80||p.x<-80||p.x>levelData.worldW+80){projs.splice(i,1);continue;}
+    // The boomerang is exempt from the bounds cull: it is allowed to overshoot
+    // while it turns around, and dropping it out here would leave `boomOut`
+    // stuck true and Phil unable to throw it ever again.
+    if(p.type!=='boomerang'&&(p.y>H+80||p.x<-80||p.x>levelData.worldW+80)){projs.splice(i,1);continue;}
+    if(p.type==='rocket'){
+      updateRocket(p,dt);
+      if(p.dead) projs.splice(i,1);
+      continue;
+    }
+    if(p.type==='boomerang'){
+      updateBoomerang(p,dt);
+      if(p.dead){ phil.boomOut=false; projs.splice(i,1); }
+      continue;
+    }
     if(p.type==='bomb'){
       if(!phil.dead&&overlap(p,phil)){ explodeBomb(p); }
       if(!p.dead){
@@ -2504,6 +2755,10 @@ function shrinkBoss(){
     b.health=1; b.maxHealth=1;
     b.laserActive=false; b.fists.length=0; b.shockwaves.length=0;
     hasRay=false;
+    // A fleeing Mech is harmless, so Phil can't die here to get rockets back —
+    // an empty bazooka at this exact moment would be the one place in the game
+    // with no way forward. Hand them over.
+    phil.ammo=WEAPONS.bazooka.ammoMax;
     SFX.win();
     scorePopup(phil.x+phil.w/2,phil.y-40,'FINISH IT!','#ffd54a');
   }
@@ -2537,6 +2792,9 @@ function bossKilled(){
   if(G.mode==='RUSH'){
     setTimeout(()=>{ rushBossCleared(); },3200);
   } else if(boss.type==='mech'){
+    // Beating the campaign never reaches levelComplete, so the last and biggest
+    // fight has to pay out here or it would be the only boss that pays nothing
+    addCoins(COIN_BOSS*2);
     setTimeout(()=>{
       if(G.score>G.highScore){G.highScore=G.score;localStorage.setItem('pe_hs',G.highScore);}
       clearSave();                // campaign finished — next run starts fresh
@@ -4196,6 +4454,68 @@ function heartPath(cx,cy){
   ctx.arc(cx+4,cy,5,Math.PI*.8,Math.PI*.2,true);
   ctx.lineTo(cx,cy+9); ctx.closePath();
 }
+// The equipped weapon, under the top-right of the HUD bar. It doubles as the
+// touch control for swapping, and that is why it is not along the bottom: on a
+// phone in landscape the control pad overlays canvas y 422-511, so a tap target
+// down there competes with the jump button. Up here it is clear in every layout,
+// and clear of the boss bar (x 330-630) and the power-up stack (top left).
+const WEAPON_BOX = { x:W-172, y:54, w:162, h:36 };
+function drawWeaponIcon(kind,cx,cy,scale){
+  const col=WEAPONS[kind].color;
+  ctx.save(); ctx.translate(cx,cy); if(scale) ctx.scale(scale,scale);
+  if(kind==='sword'){
+    ctx.strokeStyle=col; ctx.lineWidth=3; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-8,7); ctx.lineTo(7,-8); ctx.stroke();
+    ctx.strokeStyle='#8a6a3a'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(-10,9); ctx.lineTo(-5,4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-10,3); ctx.lineTo(-3,10); ctx.stroke();
+  } else if(kind==='hammer'){
+    ctx.strokeStyle='#6b4a22'; ctx.lineWidth=3; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-8,8); ctx.lineTo(4,-4); ctx.stroke();
+    ctx.save(); ctx.translate(5,-5); ctx.rotate(-Math.PI/4);
+    ctx.fillStyle=col; ctx.fillRect(-4,-6,9,12);
+    ctx.strokeStyle='#5c3d17'; ctx.lineWidth=1.5; ctx.strokeRect(-4,-6,9,12);
+    ctx.restore();
+  } else if(kind==='boomerang'){
+    ctx.strokeStyle=col; ctx.lineWidth=3.5; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath(); ctx.moveTo(-8,6); ctx.lineTo(0,-8); ctx.lineTo(8,6); ctx.stroke();
+  } else {
+    ctx.fillStyle='#4a5058'; ctx.fillRect(-10,-3,19,7);
+    ctx.fillStyle=col; ctx.fillRect(-8,-3,5,7);
+    ctx.fillStyle='#2c3138'; ctx.fillRect(8,-5,4,11); ctx.fillRect(-5,4,4,3);
+  }
+  ctx.restore();
+}
+function drawWeaponBox(){
+  if(hasRay) return;                 // the shrink ray owns the attack button
+  const b=WEAPON_BOX, wep=curWeapon(), many=ownedWeapons().length>1;
+  ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(b.x,b.y,b.w,b.h);
+  ctx.strokeStyle=wep.color; ctx.lineWidth=1.5; ctx.strokeRect(b.x+.5,b.y+.5,b.w-1,b.h-1);
+  drawWeaponIcon(shop.equipped,b.x+20,b.y+18);
+  ctx.textAlign='left'; ctx.fillStyle=wep.color; ctx.font='bold 12px monospace';
+  ctx.fillText(wep.name,b.x+38,b.y+15);
+  ctx.font='10px monospace';
+  if(many){
+    ctx.textAlign='right'; ctx.fillStyle='#8899aa';
+    ctx.fillText(isTouchDevice?'TAP':'[C]',b.x+b.w-6,b.y+14);
+    ctx.textAlign='left';
+  }
+  if(wep.ammoMax){
+    // Rockets read as pips, not a number — an empty row is obvious at a glance
+    for(let i=0;i<wep.ammoMax;i++){
+      ctx.fillStyle=i<phil.ammo?'#ff9a4a':'#4a3a2a';
+      ctx.fillRect(b.x+38+i*10,b.y+21,7,6);
+    }
+    if(phil.ammo<=0){ ctx.fillStyle='#ff7766'; ctx.fillText('EMPTY',b.x+38+wep.ammoMax*10+6,b.y+27); }
+  } else {
+    // Once you own more than one, the corner already says how to swap, so the
+    // second line is better spent on the reason you would
+    ctx.fillStyle='#889';
+    ctx.fillText(many?('DAMAGE '+wep.dmg):'your trusty blade',b.x+38,b.y+27);
+  }
+  ctx.textAlign='left';
+}
+
 function drawHUD(){
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,W,48);
   // Hearts
@@ -4225,6 +4545,11 @@ function drawHUD(){
     ctx.fillText('⚷ KEY',462,20);
     ctx.restore();
   }
+  // Coins
+  ctx.fillStyle='#ffd700'; ctx.font='bold 13px monospace';
+  ctx.beginPath(); ctx.ellipse(560,15,5,6,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#c8930a'; ctx.beginPath(); ctx.ellipse(560,15,2.4,4,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffd700'; ctx.fillText(String(shop.coins),570,20);
   // Level indicator
   ctx.textAlign='center'; ctx.fillStyle='#ccaaff'; ctx.font='12px monospace';
   const isBoss=(G.level===5||G.level===10);
@@ -4238,8 +4563,12 @@ function drawHUD(){
   } else {
     ctx.fillText((G.screen==='FINAL_BOSS_INTRO'||boss?.type==='mech')?'★ FINAL BOSS ★':`WORLD ${G.world} - ${WORLDS[G.world].name} - LEVEL ${G.level}${isBoss?' ⚠ BOSS':''} `,W/2,38);
   }
+  drawWeaponBox();
+
   // Controls hint
-  const controlsHint='A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause';
+  const controlsHint=ownedWeapons().length>1
+    ? 'A/D: Move   W/Space: Jump   Z: Attack   X: Shield   C: Swap weapon   Esc: Pause'
+    : 'A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause';
   ctx.font='bold 10px monospace';
   const hintW=ctx.measureText(controlsHint).width;
   ctx.fillStyle='rgba(0,0,0,0.45)';
@@ -4445,9 +4774,73 @@ function drawFlag(x, y, color, waving){
 }
 
 // ─── STICKMAN DRAW ───
+// Phil's bought kit, drawn in drawStickman's local space: the origin is between
+// his feet and `dir` mirrors him, so every offset below is measured from the hand
+// the caller passes in. Only the player ever gets here — enemies keep their own
+// spear and sword, which is what makes an armed Phil read as different.
+// `mode` is which of the three arm poses drawStickman is currently in.
+function drawHeldWeapon(kind, hx, hy, dir, mode, st){
+  const wep=WEAPONS[kind];
+  // With the shield up the weapon is in the *back* hand, pointing away from the
+  // way Phil faces — same as the stock sword-at-side pose it replaces.
+  const d = mode==='side' ? -dir : dir;
+  if(kind==='hammer'){
+    const len=mode==='thrust'?30:(mode==='side'?20:22);
+    const lift=mode==='thrust'?-10:(mode==='side'?-8:-9);
+    const ex=hx+d*len, ey=hy+lift;
+    ctx.strokeStyle='#6b4a22'; ctx.lineWidth=4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(ex,ey); ctx.stroke();
+    // Head sits across the end of the shaft, squared off to the swing direction
+    ctx.save();
+    ctx.translate(ex,ey); ctx.rotate(Math.atan2(ey-hy,ex-hx));
+    ctx.fillStyle=wep.color; ctx.fillRect(-3,-9,11,18);
+    ctx.fillStyle='#8a5f2a'; ctx.fillRect(-3,-9,4,18);
+    ctx.strokeStyle='#5c3d17'; ctx.lineWidth=1.5; ctx.strokeRect(-3,-9,11,18);
+    ctx.restore();
+    if(mode==='thrust'&&st.atkProg>0.5){
+      ctx.strokeStyle='rgba(255,200,120,0.4)'; ctx.lineWidth=9;
+      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(ex,ey); ctx.stroke();
+    }
+    return;
+  }
+  if(kind==='boomerang'){
+    if(st.boomOut) return;                       // it's out there, not in his hand
+    const bx=hx+d*8, by=hy-4;
+    ctx.save();
+    ctx.translate(bx,by); ctx.scale(d,1); ctx.rotate(-0.5);
+    ctx.strokeStyle=wep.color; ctx.lineWidth=4; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath(); ctx.moveTo(-7,5); ctx.lineTo(0,-6); ctx.lineTo(7,5); ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  // Bazooka — a tube along the arm, with the muzzle flash on the firing frames
+  const bx=hx-d*8, by=hy-5;
+  ctx.save();
+  ctx.translate(bx,by); ctx.scale(d,1); ctx.rotate(-0.12);
+  ctx.fillStyle='#4a5058'; ctx.fillRect(0,-4,30,9);
+  ctx.fillStyle=wep.color; ctx.fillRect(2,-4,7,9);
+  ctx.fillStyle='#2c3138'; ctx.fillRect(28,-6,5,13);          // muzzle ring
+  ctx.fillRect(6,5,5,4);                                      // grip
+  ctx.fillStyle='#8d949c'; ctx.fillRect(10,-7,9,3);           // sight
+  if(st.fireFx>0){
+    const a=Math.min(1,st.fireFx/0.16);
+    ctx.globalAlpha=a;
+    ctx.fillStyle='#ffe6a0';
+    ctx.beginPath(); ctx.moveTo(33,0); ctx.lineTo(46,-9); ctx.lineTo(42,0); ctx.lineTo(46,9); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#ff9a3c';
+    ctx.beginPath(); ctx.arc(35,0,5,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+  ctx.restore();
+}
+
 function drawStickman(x,y,w,h,opts){
   const {facingR,walkCycle,attacking,atkTimer,atkDur,shielding,
          color,swordColor,shieldColor,invTimer,dead,isPlayer,scale,isArcher,health,maxHealth,type,skin} = opts;
+  // Anything other than the sword takes the drawHeldWeapon path; the sword keeps
+  // the original strokes untouched, and enemies never reach either.
+  const wepKind = (isPlayer&&opts.weapon&&WEAPONS[opts.weapon]) ? opts.weapon : 'sword';
+  const wepState = { boomOut:!!opts.boomOut, fireFx:opts.fireFx||0, atkProg:0 };
   const sc=scale||1;
   const cx=x+w/2, by=y+h;
   const dir=facingR?1:-1;
@@ -4513,28 +4906,37 @@ function drawStickman(x,y,w,h,opts){
     ctx.strokeStyle=color; ctx.lineWidth=lw;
     // Back arm
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(-dir*(armL-3),-bodyH+12+armSw*.3); ctx.stroke();
-    // Sword at side
-    ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2;
+    // Weapon at side
     const sx=-dir*(armL-3), sy=-bodyH+12+armSw*.3;
-    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(sx-dir*18,sy-8); ctx.stroke();
+    if(wepKind!=='sword'){ drawHeldWeapon(wepKind,sx,sy,dir,'side',wepState); }
+    else {
+      ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(sx-dir*18,sy-8); ctx.stroke();
+    }
   } else if(attacking){
     const thX=dir*(armL+8+atkProg*8), thY=-bodyH+6-atkProg*4;
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(thX,thY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(-dir*(armL-4),-bodyH+12); ctx.stroke();
+    if(wepKind!=='sword'){
+      wepState.atkProg=atkProg;
+      drawHeldWeapon(wepKind,thX,thY,dir,'thrust',wepState);
+    } else {
     // Sword thrust
     ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2.5;
     ctx.beginPath(); ctx.moveTo(thX,thY); ctx.lineTo(thX+dir*26,thY-8); ctx.stroke();
     ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(thX-dir*2,thY+4); ctx.lineTo(thX+dir*4,thY-4); ctx.stroke();
     // Glow during attack
     if(atkProg>0.5){ ctx.strokeStyle='rgba(180,220,255,0.4)'; ctx.lineWidth=6; ctx.beginPath(); ctx.moveTo(thX,thY); ctx.lineTo(thX+dir*26,thY-8); ctx.stroke(); }
+    }
   } else {
     // Idle / walk
     const a1x=dir*(armL+armSw*.3), a1y=-bodyH+10+Math.abs(armSw)*.2;
     const a2x=-dir*(armL-armSw*.3), a2y=-bodyH+10-Math.abs(armSw)*.2;
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(a1x,a1y); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(a2x,a2y); ctx.stroke();
-    // Sword at rest
-    if(isPlayer){ ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(a1x,a1y); ctx.lineTo(a1x+dir*20,a1y-9); ctx.stroke(); }
+    // Weapon at rest
+    if(isPlayer&&wepKind!=='sword'){ drawHeldWeapon(wepKind,a1x,a1y,dir,'rest',wepState); }
+    else if(isPlayer){ ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(a1x,a1y); ctx.lineTo(a1x+dir*20,a1y-9); ctx.stroke(); }
     // Archer bow
     if(isArcher){ ctx.strokeStyle='#8B4513'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(a2x-dir*2,a2y-5,10,dir<0?-Math.PI*.6:-Math.PI*.4,dir<0?Math.PI*.6:Math.PI*.4,dir>0); ctx.stroke(); ctx.strokeStyle='rgba(200,200,200,0.7)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(a2x-dir*2,a2y-14); ctx.lineTo(a2x-dir*2,a2y+4); ctx.stroke(); }
     if(type==='bomber'){
@@ -5099,6 +5501,33 @@ function drawProjectiles(){
       ctx.restore();
       continue;
     }
+    if(p.type==='rocket'){
+      ctx.save();
+      ctx.translate(px,py); ctx.rotate(Math.atan2(p.vy,p.vx));
+      ctx.fillStyle='#ffd9a0';                       // exhaust flare
+      ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(-20-Math.random()*8,-3); ctx.lineTo(-20-Math.random()*8,3); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#5a5f6a'; ctx.fillRect(-10,-4,16,8);
+      ctx.fillStyle='#ff5a2a';                       // nose cone
+      ctx.beginPath(); ctx.moveTo(6,-4); ctx.lineTo(13,0); ctx.lineTo(6,4); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#e8ecf2'; ctx.fillRect(-2,-4,3,8);
+      ctx.fillStyle='#3a3f48';                       // tail fins
+      ctx.beginPath(); ctx.moveTo(-10,-4); ctx.lineTo(-14,-8); ctx.lineTo(-8,-4); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-10,4); ctx.lineTo(-14,8); ctx.lineTo(-8,4); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      continue;
+    }
+    if(p.type==='boomerang'){
+      ctx.save();
+      ctx.translate(px+8,py+8); ctx.rotate(p.spin);
+      ctx.strokeStyle='rgba(143,224,138,0.35)'; ctx.lineWidth=9; ctx.lineCap='round'; ctx.lineJoin='round';
+      ctx.beginPath(); ctx.moveTo(-9,7); ctx.lineTo(0,-8); ctx.lineTo(9,7); ctx.stroke();
+      ctx.strokeStyle='#8fe08a'; ctx.lineWidth=5;
+      ctx.beginPath(); ctx.moveTo(-9,7); ctx.lineTo(0,-8); ctx.lineTo(9,7); ctx.stroke();
+      ctx.strokeStyle='#d8ffd0'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(-7,5); ctx.lineTo(0,-6); ctx.lineTo(7,5); ctx.stroke();
+      ctx.restore();
+      continue;
+    }
     const ang=Math.atan2(p.vy,p.vx);
     ctx.save(); ctx.translate(px,py); ctx.rotate(ang);
     ctx.fillStyle='#c89030'; ctx.strokeStyle='#8B6914'; ctx.lineWidth=1;
@@ -5168,9 +5597,32 @@ function drawShrinkRay(){
   ctx.restore();
 }
 
+function drawCoin(p){
+  if(p.t<=0) return;                                  // still queued behind its siblings
+  const cx=p.x+7-cam.x, cy=p.y+7-cam.y;
+  // Spin read as a squashing ellipse rather than a rotation, so it reads as a
+  // coin edge-on at any size
+  const sq=Math.abs(Math.cos(p.spin));
+  ctx.save();
+  ctx.globalAlpha=0.35;
+  ctx.fillStyle='#ffd700';
+  ctx.beginPath(); ctx.ellipse(cx,cy,10,10,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#c8930a';
+  ctx.beginPath(); ctx.ellipse(cx,cy,Math.max(1.2,7*sq),7,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffd700';
+  ctx.beginPath(); ctx.ellipse(cx,cy,Math.max(0.8,5.6*sq),5.6,0,0,Math.PI*2); ctx.fill();
+  if(sq>0.45){
+    ctx.fillStyle='#fff3b0';
+    ctx.beginPath(); ctx.ellipse(cx-1.5*sq,cy-1.5,1.8*sq,2.4,0,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawPickups(){
   for(const p of pickups){
     if(p.dead) continue;
+    if(p.type==='coin'){ drawCoin(p); continue; }
     const px=p.x-cam.x, py=p.y-cam.y+Math.sin(p.bob)*3;
     const cx=px+9, cy=py+9;
     const def=POWERUPS[p.type]||POWERUPS.health;
@@ -5316,6 +5768,201 @@ function drawSecretPicker(){
   ctx.fillText('Cheating in a secret does not count towards Golden Phil',W/2,H-40);
   ctx.fillStyle='#445544';
   ctx.fillText(isTouchDevice?'Tap a row':'Arrows/WASD: Select   Enter: Play   Esc: Back',W/2,H-22);
+  ctx.textAlign='left';
+}
+
+// ══════════════════════════════════════════════════════
+//  WEAPON SHOP
+// ══════════════════════════════════════════════════════
+// Reachable from the title and from the pause menu, and it remembers which, so
+// shopping mid-level drops you back into the level rather than the menu. The
+// level underneath stays exactly as it was — nothing here touches the run.
+let shopSel=0, shopKeyHeld=false, shopReturn='TITLE', shopMsg='', shopMsgT=0;
+const shopRows = ()=>WEAPON_ORDER.length+1;                 // + a BACK row
+function shopCard(i){ return { x:30+i*232, y:132, w:212, h:252 }; }
+function shopBackBox(){ return { x:W/2-160, y:H-62, w:320, h:34 }; }
+function shopBox(i){ return i<WEAPON_ORDER.length ? shopCard(i) : shopBackBox(); }
+
+function openShop(from){
+  initAC();
+  shopReturn=from; shopSel=Math.max(0,WEAPON_ORDER.indexOf(shop.equipped));
+  shopKeyHeld=true;                       // the key that opened this is still down
+  shopMsg=''; shopMsgT=0;
+  G.screen='SHOP';
+  SFX.pickup();
+}
+function closeShop(){
+  const back=shopReturn;
+  shopKeyHeld=true;
+  // The Escape that closed this is still down on the next frame, and whatever
+  // screen we land on reads it as its own press — PLAYING would pause instantly
+  if(back==='PLAYING'){ pauseKeyHeld=true; G.screen='PLAYING'; }
+  else { titleKeyHeld=true; G.screen='TITLE'; }
+  SFX.pickup();
+}
+function shopSay(msg){ shopMsg=msg; shopMsgT=2.2; }
+
+function shopActivate(){
+  if(shopSel>=WEAPON_ORDER.length){ closeShop(); return; }
+  const id=WEAPON_ORDER[shopSel], wep=WEAPONS[id];
+  if(shop.owned.has(id)){
+    if(shop.equipped===id){ shopSay(wep.name+' is already in your hands'); SFX.pickup(); return; }
+    equipWeapon(id); SFX.power(); shopSay(wep.name+' equipped!');
+    return;
+  }
+  if(shop.coins<wep.price){
+    SFX.broke(); shopSay('You need '+(wep.price-shop.coins)+' more coins');
+    return;
+  }
+  shop.coins-=wep.price;
+  shop.owned.add(id);
+  shop.equipped=id;
+  // Buying the bazooka hands over a full load, so it is usable the moment you
+  // walk out — a fresh purchase that fires nothing would just look broken.
+  if(wep.ammoMax&&phil) phil.ammo=wep.ammoMax;
+  saveShop();
+  SFX.buy(); shopSay(wep.name+' bought and equipped!');
+}
+
+function handleShopInput(dt){
+  if(shopMsgT>0) shopMsgT-=dt;
+  const left=keys['ArrowLeft']||keys['KeyA'], right=keys['ArrowRight']||keys['KeyD'];
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const go=keys['Enter']||keys['Space'], back=keys['Escape'];
+  const n=shopRows();
+  if(left||right||up||down||go||back){
+    if(!shopKeyHeld){
+      shopKeyHeld=true;
+      if(back) closeShop();
+      else if(go) shopActivate();
+      // Up/down step between the card row and BACK; left/right walk the cards
+      else if(down){ shopSel=shopSel<WEAPON_ORDER.length?WEAPON_ORDER.length:0; SFX.pickup(); }
+      else if(up){ shopSel=shopSel<WEAPON_ORDER.length?WEAPON_ORDER.length:0; SFX.pickup(); }
+      else if(right){ shopSel=(shopSel+1)%n; SFX.pickup(); }
+      else if(left){ shopSel=(shopSel+n-1)%n; SFX.pickup(); }
+    }
+  } else shopKeyHeld=false;
+
+  if(tapPoint){
+    for(let i=0;i<n;i++){
+      const b=shopBox(i);
+      if(tapPoint.x>=b.x-8&&tapPoint.x<=b.x+b.w+8&&tapPoint.y>=b.y-8&&tapPoint.y<=b.y+b.h+8){
+        shopSel=i; tapPoint=null; shopActivate(); return;
+      }
+    }
+    tapPoint=null;
+  }
+}
+
+function shopWrap(text,maxChars){
+  const out=[]; let line='';
+  for(const word of text.split(' ')){
+    if(line&&(line+' '+word).length>maxChars){ out.push(line); line=word; }
+    else line=line?line+' '+word:word;
+  }
+  if(line) out.push(line);
+  return out;
+}
+
+function drawShop(){
+  ctx.fillStyle='rgba(6,8,14,0.97)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#ffb300'; ctx.shadowBlur=16;
+  ctx.fillStyle='#ffd54a'; ctx.font='bold 32px monospace';
+  ctx.fillText('WEAPON SHOP',W/2,58);
+  ctx.restore();
+
+  // Purse
+  ctx.fillStyle='#ffd700';
+  ctx.beginPath(); ctx.ellipse(W/2-52,82,7,8,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#c8930a'; ctx.beginPath(); ctx.ellipse(W/2-52,82,3,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffd700'; ctx.font='bold 20px monospace'; ctx.textAlign='left';
+  ctx.fillText(shop.coins+' COINS',W/2-38,89);
+  ctx.textAlign='center';
+  ctx.fillStyle='#6f7a86'; ctx.font='11px monospace';
+  ctx.fillText('Beat enemies and finish levels to earn coins',W/2,110);
+
+  for(let i=0;i<WEAPON_ORDER.length;i++){
+    const id=WEAPON_ORDER[i], wep=WEAPONS[id], b=shopCard(i);
+    const owned=shop.owned.has(id), equipped=shop.equipped===id;
+    const afford=shop.coins>=wep.price;
+    const sel=shopSel===i;
+
+    ctx.fillStyle=sel?'rgba(60,52,20,0.85)':'rgba(0,0,0,0.45)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle=sel?'#ffd54a':(equipped?wep.color:(owned?'#5a6a55':'#3a3f48'));
+    ctx.lineWidth=sel?3:2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+
+    // Icon on its own plate so every weapon sits at the same optical size
+    ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(b.x+1,b.y+1,b.w-2,62);
+    ctx.save();
+    if(!owned&&!afford) ctx.globalAlpha=0.45;
+    drawWeaponIcon(id,b.x+b.w/2,b.y+32,2.1);
+    ctx.restore();
+
+    ctx.fillStyle=owned?wep.color:(afford?'#e8e2d0':'#79808a');
+    ctx.font='bold 17px monospace';
+    ctx.fillText(wep.name,b.x+b.w/2,b.y+84);
+
+    ctx.fillStyle='#9aa4b0'; ctx.font='11px monospace';
+    shopWrap(wep.blurb,26).forEach((l,li)=>ctx.fillText(l,b.x+b.w/2,b.y+104+li*14));
+
+    ctx.textAlign='left';
+    wep.stats.forEach((s,si)=>{
+      ctx.fillStyle='#7f8a96'; ctx.font='10px monospace';
+      ctx.fillText('•',b.x+14,b.y+150+si*16);
+      ctx.fillStyle='#c2cad4';
+      ctx.fillText(s,b.x+26,b.y+150+si*16);
+    });
+    ctx.textAlign='center';
+
+    // Price / status strip
+    const sy=b.y+b.h-40;
+    if(equipped){
+      ctx.fillStyle='rgba(60,140,70,0.5)'; ctx.fillRect(b.x+10,sy,b.w-20,28);
+      ctx.strokeStyle='#7fd06a'; ctx.lineWidth=1.5; ctx.strokeRect(b.x+10,sy,b.w-20,28);
+      ctx.fillStyle='#c8ffb8'; ctx.font='bold 13px monospace';
+      ctx.fillText('✓ EQUIPPED',b.x+b.w/2,sy+19);
+    } else if(owned){
+      ctx.fillStyle='rgba(40,60,90,0.5)'; ctx.fillRect(b.x+10,sy,b.w-20,28);
+      ctx.strokeStyle='#6a8fbf'; ctx.lineWidth=1.5; ctx.strokeRect(b.x+10,sy,b.w-20,28);
+      ctx.fillStyle='#bcd8ff'; ctx.font='bold 13px monospace';
+      ctx.fillText('OWNED — EQUIP',b.x+b.w/2,sy+19);
+    } else {
+      ctx.fillStyle=afford?'rgba(120,90,20,0.55)':'rgba(50,25,25,0.55)';
+      ctx.fillRect(b.x+10,sy,b.w-20,28);
+      ctx.strokeStyle=afford?'#ffd54a':'#7a4a4a'; ctx.lineWidth=1.5;
+      ctx.strokeRect(b.x+10,sy,b.w-20,28);
+      ctx.fillStyle=afford?'#ffe89a':'#c98d8d'; ctx.font='bold 13px monospace';
+      ctx.fillText(wep.price+' COINS',b.x+b.w/2,sy+19);
+    }
+    if(sel&&Math.sin(frameN*.12)>0){
+      ctx.fillStyle='#ffd54a'; ctx.font='bold 18px monospace';
+      ctx.fillText('▼',b.x+b.w/2,b.y-8);
+    }
+  }
+
+  // BACK
+  const bb=shopBackBox(), bsel=shopSel>=WEAPON_ORDER.length;
+  ctx.fillStyle=bsel?'rgba(120,90,20,0.55)':'rgba(0,0,0,0.4)';
+  ctx.fillRect(bb.x,bb.y,bb.w,bb.h);
+  ctx.strokeStyle=bsel?'#ffd54a':'#4a4636'; ctx.lineWidth=2;
+  ctx.strokeRect(bb.x,bb.y,bb.w,bb.h);
+  ctx.fillStyle=bsel?'#ffffff':'#9a9276'; ctx.font='bold 15px monospace';
+  ctx.fillText(shopReturn==='PLAYING'?'BACK TO THE LEVEL':'BACK TO THE TITLE',W/2,bb.y+23);
+
+  if(shopMsgT>0){
+    ctx.globalAlpha=Math.min(1,shopMsgT*2);
+    ctx.fillStyle='#ffe89a'; ctx.font='bold 14px monospace';
+    ctx.fillText(shopMsg,W/2,bb.y-12);
+    ctx.globalAlpha=1;
+  } else {
+    ctx.fillStyle='#445544'; ctx.font='11px monospace';
+    ctx.fillText(isTouchDevice?'Tap a weapon to buy or equip it'
+      :'Arrows/AD: Pick   Enter: Buy / Equip   Esc: Back',W/2,bb.y-12);
+  }
   ctx.textAlign='left';
 }
 
@@ -5564,6 +6211,7 @@ function titleItems(){
   items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
   items.push({ id:'rush', label:()=>'BOSS RUSH' });
+  items.push({ id:'shop', label:()=>'WEAPON SHOP  ('+shop.coins+' coins)' });
   items.push({ id:'skin', label:()=>'SKIN: '+skinDef().name });
   items.push({ id:'music', label:()=>'MUSIC: '+(musicOn?'ON':'OFF') });
   return items;
@@ -5571,8 +6219,8 @@ function titleItems(){
 function titleBox(i,count){
   const n=count||titleItems().length;
   // Tightens up as rows are added, so the footer never runs off the canvas
-  const gap=n>=6?27:(n>=5?28:32), h=n>=6?25:(n>=5?26:28);
-  const top=n>=6?342:(n>=5?344:(n>=4?356:372));
+  const gap=n>=7?24:(n>=6?27:(n>=5?28:32)), h=n>=7?22:(n>=6?25:(n>=5?26:28));
+  const top=n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372)));
   return { x:W/2-160, y:top+i*gap, w:320, h };
 }
 
@@ -5607,6 +6255,8 @@ function titleActivate(){
     openMap();
   } else if(id==='rush'){
     startRushRun();
+  } else if(id==='shop'){
+    openShop('TITLE');
   } else if(id==='music'){
     toggleMusic();
   } else {
@@ -5686,11 +6336,13 @@ function drawTitle(){
     ctx.fillRect(b.x,b.y,b.w,b.h);
     ctx.strokeStyle=warn?'#ff8844':sel?'#aaff66':'#3a5a30'; ctx.lineWidth=2;
     ctx.strokeRect(b.x,b.y,b.w,b.h);
-    ctx.fillStyle=warn?'#ffddcc':sel?'#ffffff':'#8faa80'; ctx.font='bold 16px monospace';
-    ctx.fillText(items[i].label(),W/2,b.y+19);
+    // Type scales with the row height so a seventh row doesn't spill its box
+    const fs=b.h>=25?16:14, base=b.y+Math.round(b.h/2)+Math.round(fs*0.36);
+    ctx.fillStyle=warn?'#ffddcc':sel?'#ffffff':'#8faa80'; ctx.font='bold '+fs+'px monospace';
+    ctx.fillText(items[i].label(),W/2,base);
     if(sel&&Math.sin(frameN*.12)>0){
-      ctx.fillStyle=warn?'#ff8844':'#ffcc22'; ctx.font='bold 16px monospace';
-      ctx.fillText('>',b.x-16,b.y+19); ctx.fillText('<',b.x+b.w+16,b.y+19);
+      ctx.fillStyle=warn?'#ff8844':'#ffcc22'; ctx.font='bold '+fs+'px monospace';
+      ctx.fillText('>',b.x-16,base); ctx.fillText('<',b.x+b.w+16,base);
     }
   }
   const bottom=titleBox(items.length-1,items.length).y+28;
@@ -5749,12 +6401,16 @@ function drawLevelClear(){
   ctx.fillStyle='#ffd700'; ctx.font='24px monospace'; ctx.fillText('Score: '+G.score,W/2,H/2+20);
   if(G.mode==='RUSH'){
     ctx.fillStyle='#ffbb55'; ctx.font='18px monospace';
-    ctx.fillText(`${rush.cleared} / ${RUSH_TOTAL} bosses defeated  •  +1.5 hearts`,W/2,H/2+55);
+    ctx.fillText(`${rush.cleared} / ${RUSH_TOTAL} bosses defeated  •  +1.5 hearts  •  +${lastCoinAward} coins`,W/2,H/2+55);
     const nxt=rush.queue[rush.idx+1];
     ctx.fillStyle='#aacccc'; ctx.font='16px monospace';
     ctx.fillText(nxt?'NEXT: '+getBossMeta(nxt).name:'Final boss down!',W/2,H/2+85);
   } else {
-    ctx.fillStyle='#aacccc'; ctx.font='16px monospace'; ctx.fillText('Continuing...',W/2,H/2+60);
+    if(lastCoinAward>0){
+      ctx.fillStyle='#ffd700'; ctx.font='bold 18px monospace';
+      ctx.fillText('+'+lastCoinAward+' COINS   ('+shop.coins+' saved up)',W/2,H/2+52);
+    }
+    ctx.fillStyle='#aacccc'; ctx.font='16px monospace'; ctx.fillText('Continuing...',W/2,H/2+82);
   }
   ctx.textAlign='left';
 }
@@ -5812,18 +6468,29 @@ function drawWin(){
 //  PAUSE MENU
 // ══════════════════════════════════════════════════════
 // Built fresh so the music row shows its current state
-const pauseItems = ()=>['RESUME','RESTART LEVEL','MUSIC: '+(musicOn?'ON':'OFF'),'WORLD MAP','QUIT TO TITLE'];
+// Keyed by id rather than position: the actions used to be a chain of index
+// comparisons, so inserting a row silently rewired every one below it.
+const pauseItems = ()=>[
+  { id:'resume',  label:'RESUME' },
+  { id:'restart', label:'RESTART LEVEL' },
+  { id:'shop',    label:'WEAPON SHOP  ('+shop.coins+')' },
+  { id:'music',   label:'MUSIC: '+(musicOn?'ON':'OFF') },
+  { id:'map',     label:'WORLD MAP' },
+  { id:'quit',    label:'QUIT TO TITLE' },
+];
 function drawPauseMenu(){
   ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center';
   ctx.fillStyle='#ccaaff'; ctx.font='bold 36px monospace'; ctx.shadowColor='#8844cc'; ctx.shadowBlur=14;
-  ctx.fillText('PAUSED',W/2,H/2-100); ctx.shadowBlur=0;
+  ctx.fillText('PAUSED',W/2,H/2-150); ctx.shadowBlur=0;
+  // Six rows at the old 52px pitch run off the bottom of the canvas
+  const gap=44, top=H/2-88;
   pauseItems().forEach((item,i)=>{
     const sel=i===pauseSelect;
     ctx.fillStyle=sel?'#ffffff':'#887799';
-    ctx.font=(sel?'bold ':'')+'20px monospace';
-    if(sel){ ctx.fillStyle='rgba(100,60,160,0.5)'; ctx.fillRect(W/2-140,H/2-46+i*52,280,40); ctx.fillStyle='#ffffff'; }
-    ctx.fillText((sel?'▶ ':'')+item,W/2,H/2-20+i*52);
+    ctx.font=(sel?'bold ':'')+'19px monospace';
+    if(sel){ ctx.fillStyle='rgba(100,60,160,0.5)'; ctx.fillRect(W/2-150,top+i*gap-22,300,34); ctx.fillStyle='#ffffff'; }
+    ctx.fillText((sel?'▶ ':'')+item.label,W/2,top+i*gap);
   });
   ctx.textAlign='left';
 }
@@ -6568,6 +7235,13 @@ function loop(ts){
     drawBackground(); drawPlatforms(); drawDecorations(); drawHUD();
     drawSecretPicker(); handleSecretPickInput(); return;
   }
+  // Opened from the title as well as mid-level, so it can't assume a live level
+  // to draw itself over the way the secret picker does
+  if(G.screen==='SHOP'){
+    if(shopReturn==='PLAYING'&&levelData){ drawBackground(); drawPlatforms(); drawDecorations(); }
+    else drawTitle();
+    drawShop(); handleShopInput(dt); return;
+  }
   // --- BOSS RUSH COMPLETE ---
   if(G.screen==='RUSH_COMPLETE'){ drawRushComplete(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.mode='CAMPAIGN'; G.screen='TITLE'; } return; }
   // --- CUTSCENE ---
@@ -6623,13 +7297,32 @@ function loop(ts){
       if(keys['ArrowUp']  ||keys['KeyW']){ pauseSelect=(pauseSelect+pauseItems().length-1)%pauseItems().length; keys['ArrowUp']=false; keys['KeyW']=false; }
       if(keys['Enter']||keys['Space']){
         keys['Enter']=false; keys['Space']=false;
-        if(pauseSelect===0){ paused=false; }
-        else if(pauseSelect===1){ paused=false; G.lives=3; startLevel(); }
-        else if(pauseSelect===2){ toggleMusic(); }          // stay paused
-        else if(pauseSelect===3){ paused=false; openMap(); }
-        else if(pauseSelect===4){ paused=false; G.screen='TITLE'; }
+        const id=pauseItems()[pauseSelect].id;
+        if(id==='resume'){ paused=false; }
+        else if(id==='restart'){ paused=false; G.lives=3; startLevel(); }
+        else if(id==='shop'){ paused=false; openShop('PLAYING'); }
+        else if(id==='music'){ toggleMusic(); }             // stay paused
+        else if(id==='map'){ paused=false; openMap(); }
+        else if(id==='quit'){ paused=false; G.screen='TITLE'; }
       }
     } else {
+      // Weapon swap — C or Q cycles, the number keys pick directly, and tapping
+      // the HUD box is the touch route (the pad has no room for a sixth button)
+      const swapKey=keys['KeyC']||keys['KeyQ'];
+      const digit=WEAPON_ORDER.findIndex((w,i)=>keys['Digit'+(i+1)]);
+      if(swapKey||digit>=0){
+        if(!swapKeyHeld){
+          swapKeyHeld=true;
+          if(digit>=0) { if(shop.owned.has(WEAPON_ORDER[digit])&&shop.equipped!==WEAPON_ORDER[digit]){ equipWeapon(WEAPON_ORDER[digit]); SFX.pickup(); } }
+          else cycleWeapon(1);
+        }
+      } else swapKeyHeld=false;
+      if(tapPoint){
+        const b=WEAPON_BOX;
+        if(tapPoint.x>=b.x-10&&tapPoint.x<=b.x+b.w+10&&tapPoint.y>=b.y-10&&tapPoint.y<=b.y+b.h+10) cycleWeapon(1);
+        tapPoint=null;
+      }
+
       updatePlatforms(dt);   // must lead: riders are carried before they move themselves
       updatePhil(dt);
       updateEnemies(dt);
@@ -6704,11 +7397,14 @@ function loop(ts){
     if(phil.dead) ctx.globalAlpha=Math.max(0,phil.deathTimer/1.8);
     drawStickman(phil.x,phil.y,phil.w,phil.h,{
       facingR:phil.facingR, walkCycle:phil.walkCycle,
-      attacking:phil.attacking, atkTimer:phil.atkTimer, atkDur:ATK_DUR,
+      attacking:phil.attacking, atkTimer:phil.atkTimer, atkDur:curWeapon().dur||ATK_DUR,
       shielding:phil.shielding,
       color:skinDef().color, swordColor:skinDef().sword,
       invTimer:phil.invTimer, dead:phil.dead,
       isPlayer:true, scale:1, skin:currentSkin,
+      // The shrink ray overrides the attack button, so Phil shouldn't be
+      // brandishing a bazooka he currently can't fire
+      weapon:hasRay?'sword':shop.equipped, boomOut:phil.boomOut, fireFx:phil.fireFx,
     });
     ctx.restore();
   }

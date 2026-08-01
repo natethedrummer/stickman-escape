@@ -41,8 +41,9 @@ Or download and open `index.html` in any modern browser (Chrome, Firefox, Safari
 |--------|------|
 | Move | `A` / `D` or Arrow Keys |
 | Jump | `Space`, `W`, or `↑` |
-| Sword Attack | `Z` or `J` |
+| Attack | `Z` or `J` |
 | Shield (hold) | `X`, `K`, or `Shift` |
+| Swap weapon | `C` / `Q` to cycle, `1`-`4` to pick, or tap the weapon panel |
 | Restart | `R` or `Enter` |
 | Cutscene — next panel | `Space`, `Enter`, `Z`, `→`, or click |
 | Cutscene — skip | `Escape` or the SKIP button |
@@ -50,6 +51,20 @@ Or download and open `index.html` in any modern browser (Chrome, Firefox, Safari
 Mobile touch controls appear automatically on touch devices.
 
 > **Shield tip:** The shield only blocks arrows coming from the front — face the archer before raising it.
+
+---
+
+## 🔨 Weapon Shop
+
+Beaten enemies drop coins, and finishing a level, a boss or a secret pays out more. Spend them from
+the title screen or the pause menu. What you buy is kept forever — a new game never takes it away.
+
+| Weapon | Price | Damage | What makes it worth it |
+|--------|-------|--------|------------------------|
+| Sword | free | 1 | Fast, and always in your hands |
+| Hammer | 200 | 3 | Slow swing, but it smashes a Heavy Soldier's raised shield |
+| Boomerang | 350 | 1 each way | Flies ~230px through walls and hits again on the way back |
+| Bazooka | 500 | 2 in a blast | Blows up a crowd at once; 6 rockets a life, refilled on respawn |
 
 ---
 
