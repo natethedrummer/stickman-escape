@@ -3,6 +3,26 @@
 ## [Unreleased]
 
 ### Added
+- Weapon shop — beaten enemies now drop coins that fly to Phil and bank instantly, and levels,
+  bosses and secrets pay out on top. Spend them on three new weapons: the **HAMMER** (200) swings
+  slow but hits for 3 and smashes straight through a Heavy Soldier's raised shield, which nothing
+  else in the game does; the **BOOMERANG** (350) is thrown, flies 230px through walls, and damages
+  everything it touches on the way out *and* on the way back; the **BAZOOKA** (500) fires a rocket
+  that explodes for 2 damage across a whole crowd, ignores shields, and knocks enemy arrows and
+  bombs out of the air, with 6 rockets a life that refill every time Phil respawns. The sword is
+  free, always owned, and unchanged. Swap weapons any time with **C** (or 1-4, or by tapping the
+  weapon panel on touch) — the shop is on the title screen and in the pause menu, and what you
+  bought survives NEW GAME, dying, and finishing the campaign
+  ([#4](https://github.com/natethedrummer/stickman-escape/issues/4),
+  [#12](https://github.com/natethedrummer/stickman-escape/issues/12))
+
+### Fixed
+- The pause menu's actions were a chain of hardcoded index comparisons, so inserting a row rewired
+  every action below it. They are keyed by id now
+- The Mech hands back a full load of rockets when it starts fleeing. It is harmless in that state,
+  so a player who arrived with an empty bazooka could neither shoot it nor die to reload
+
+### Added
 - Secret level select cheat — type `odlaw` (or ▲ ⚔ ▲ ⚔ on touch) during play to open a menu listing
   all six secret levels, and jump straight into any of them without hunting for that world's key.
   The stage looks and sounds like the world it belongs to wherever you jumped in from, and finishing
