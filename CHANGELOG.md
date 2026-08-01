@@ -3,6 +3,26 @@
 ## [Unreleased]
 
 ### Added
+- Tutorial — an eight-step **HOW TO PLAY** stage that teaches the controls before World 1: walking,
+  jumping, crossing a gap, attacking, the five hearts and what half a heart means, blocking arrows
+  (and specifically that the shield only stops the ones hitting Phil's **front**), the blue
+  checkpoint flag and the red finish flag. Each step states what to do, shows the keys — or the
+  on-screen buttons on a phone — and waits until you have actually done it. It is a hand-built stage
+  rather than an overlay on World 1 Level 1, because campaign levels are generated from a seed and
+  cannot promise a gap here and one soldier there. Nothing in it can be failed: falling costs no
+  lives and puts Phil back inside the step he was on, and the two steps that ask for a skill let go
+  on their own after a while rather than trapping anyone. It plays automatically the first time
+  anyone starts a new game, can be skipped from the pause menu, and is on the title screen to replay
+  any time. Campaign progress, score, lives and the save file are all parked while it runs
+  ([#13](https://github.com/natethedrummer/stickman-escape/issues/13))
+
+### Fixed
+- Finish flags and checkpoints floated a pole's length off the ground and could not be reached by
+  walking into them — you had to jump. `genLevel` passed the flag's ground line as `GROUND_Y-80`,
+  but the draw call and the hit box each subtract the 80px pole height themselves, so it came off
+  twice. Every campaign level is affected; secret levels always passed `GROUND_Y` and were correct
+
+### Added
 - Weapon shop — beaten enemies now drop coins that fly to Phil and bank instantly, and levels,
   bosses and secrets pay out on top. Spend them on three new weapons: the **HAMMER** (200) swings
   slow but hits for 3 and smashes straight through a Heavy Soldier's raised shield, which nothing

@@ -52,6 +52,9 @@ Mobile touch controls appear automatically on touch devices.
 
 > **Shield tip:** The shield only blocks arrows coming from the front — face the archer before raising it.
 
+New to the game? Pick **HOW TO PLAY** on the title screen. It runs automatically the first time you
+start a new game, and can be skipped from the pause menu.
+
 ---
 
 ## 🔨 Weapon Shop

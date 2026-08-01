@@ -872,6 +872,106 @@ function genSecretLevel(world, theme){
     playerStart:{x:60,y:GROUND_Y-PHIL_H-1}, isBoss:false, secret:theme };
 }
 
+// ══════════════════════════════════════════════════════
+//  TUTORIAL
+// ══════════════════════════════════════════════════════
+// A hand-built level rather than an overlay on World 1 Level 1: campaign levels
+// are procedurally generated from a seed, so there is no way to promise a gap
+// here and one soldier there. Every obstacle below exists to set up exactly one
+// prompt, in the order the prompts appear.
+//
+// Ground is flat and continuous apart from a single 100px hole, so the only way
+// to fall is the one the tutorial is about to teach.
+function genTutorialLevel(){
+  const plats=[], enemies=[], decorations=[];
+  const worldW=2760;
+
+  plats.push({x:0,   y:GROUND_Y,    w:420,  h:20});   // start — walking room
+  plats.push({x:420, y:GROUND_Y-60, w:190,  h:80});   // a wall to hop onto
+  plats.push({x:610, y:GROUND_Y,    w:300,  h:20});   // landing
+  //           910 .. 1010 — the hole
+  plats.push({x:1010,y:GROUND_Y,    w:1750, h:20});   // everything after the hole
+  const perch={x:1880,y:GROUND_Y-110,w:150,h:14};     // archer's ledge
+  plats.push(perch);
+
+  enemies.push({ type:'soldier', x:1240, y:GROUND_Y-ENEMY_CFG.soldier.h,
+                 pL:1120, pR:1440 });
+  // Up on the perch and out of sword reach, so it shoots instead of closing —
+  // the shield lesson needs arrows in the air, not a melee scrap
+  enemies.push({ type:'archer', x:1935, y:perch.y-ENEMY_CFG.archer.h,
+                 pL:perch.x+4, pR:perch.x+perch.w-4 });
+
+  for(let i=0;i<26;i++){
+    decorations.push({ type:'tree', x:Math.floor((i*107+53)%worldW),
+                       scale:0.5+((i*37)%80)/100, layer:i%2 });
+  }
+
+  return { worldW, plats, enemies, decorations, hazards:[], powerups:[],
+    hasMovers:false, key:null, door:null,
+    checkX:2300, checkY:GROUND_Y, flagX:2620, flagY:GROUND_Y,
+    playerStart:{x:60,y:GROUND_Y-PHIL_H-1}, isBoss:false, isTutorial:true };
+}
+
+// Each step owns one idea, states it as an instruction, and names the thing that
+// finishes it. `safeX` is where a fall puts Phil back — always inside the step he
+// is on, so nobody is ever sent back to the beginning.
+// `mercy` auto-advances the two steps that ask for a skill, so a player who can't
+// land it is never stuck behind it. Steps without one can't be failed.
+const TUT_STEPS = [
+  { id:'walk',  safeX:60,
+    title:'Walk to the right',
+    body:'Phil escapes to the right. Hold a key to get him moving.',
+    keys:['A','D'], touch:['◀','▶'],
+    done:()=> phil.x>210 },
+  { id:'jump',  safeX:200,
+    title:'Now jump',
+    body:'There is a wall ahead. Jump up onto it and keep going.',
+    keys:['SPACE'], touch:['▲'],
+    done:()=> tut.jumps>=1 },
+  { id:'gap',   safeX:660,
+    title:'Jump across the hole',
+    body:'Run at it and jump. Phil jumps far enough — you do not need a run-up.',
+    keys:['SPACE'], touch:['▲'],
+    done:()=> phil.x>1040 },
+  { id:'sword', safeX:1060, mercy:30,
+    title:'Beat the soldier',
+    body:'Get close and swing. Two hits will do it.',
+    keys:['Z'], touch:['⚔'],
+    done:()=> tutFoe('soldier') && tutFoe('soldier').dead },
+  { id:'hearts', safeX:1500,
+    title:'Your five hearts',
+    body:'Every hit costs half a heart, so you can take ten before you are out. '+
+         'Beaten enemies sometimes drop a heart to top you back up.',
+    keys:['ANY KEY'], touch:['TAP'],
+    done:()=> tut.held>0.7 && (In.jump()||In.atk()||In.start()||touches.start) },
+  { id:'shield', safeX:1760, mercy:22,
+    title:'Block two arrows',
+    body:'Hold the shield up — but it only stops arrows coming at Phil\'s FRONT. '+
+         'Face the archer, or they go straight through.',
+    keys:['X'], touch:['🛡'],
+    done:()=> tut.blocks>=2 || (tutFoe('archer') && tutFoe('archer').dead) },
+  { id:'check', safeX:2100,
+    title:'Touch the blue flag',
+    body:'Blue flags are checkpoints. Die after one and you start again there '+
+         'instead of back at the beginning.',
+    keys:[], touch:[],
+    done:()=> checkActivated },
+  { id:'flag',  safeX:2360,
+    title:'Now the red flag',
+    body:'Red flags finish the level. That is everything — go and win it.',
+    keys:[], touch:[],
+    done:()=> false },                       // the flag itself ends the tutorial
+];
+
+const TUT_KEY='pe_tutorial';
+let tutorialDone = localStorage.getItem(TUT_KEY)==='done';
+let tut = null;                 // { i, jumps, blocks, held, mercyT, flash, ... } while running
+let tutReturn='TITLE';          // where finishing sends the player
+let tutKeep=null;               // campaign score/lives parked while the tutorial runs
+
+function tutFoe(type){ return enemies.find(e=>e.type===type)||null; }
+function tutStep(){ return tut ? TUT_STEPS[tut.i] : null; }
+
 function genLevel(world, level) {
   const isBoss = (level===5||level===10);
   const rng = makeRNG(world*100+level);
@@ -1034,8 +1134,14 @@ function genLevel(world, level) {
     decorations.push({type:pickDecorType(world,rng),x:Math.floor(rng()*worldW),scale:0.5+rng()*0.8,layer:rng()<0.5?0:1});
   }
 
+  // checkY/flagY are the GROUND LINE the flag stands on, not the top of its pole.
+  // Both the draw call and the hit box subtract the 80px pole height themselves —
+  // passing GROUND_Y-80 here subtracted it twice, which floated every campaign
+  // flag a pole's length off the ground and put its hit box out of reach of a
+  // walking Phil. You had to jump into the finish flag to end a level.
+  // genSecretLevel has always passed GROUND_Y; this now matches it.
   return { worldW, plats, enemies, decorations, hazards, powerups, hasMovers, key, door,
-    checkX, checkY:GROUND_Y-80, flagX, flagY:GROUND_Y-80,
+    checkX, checkY:GROUND_Y, flagX, flagY:GROUND_Y,
     playerStart:{x:80,y:GROUND_Y-PHIL_H-1}, isBoss:false };
 }
 
@@ -1533,6 +1639,92 @@ function leaveSecret(){
   nextLevel();                    // the door counted as clearing that level
 }
 
+// ── TUTORIAL FLOW ──
+// Runs as its own mode. Campaign progress, the save file, lives and score are all
+// parked on the way in and restored on the way out, so the tutorial can be
+// replayed from the title mid-campaign without touching a thing.
+function startTutorial(from='TITLE'){
+  initAC();
+  tutReturn=from;
+  tutKeep={ mode:G.mode, world:G.world, level:G.level, score:G.score, lives:G.lives };
+  G.mode='TUTORIAL'; G.world=1; G.level=1; G.score=0; G.lives=3;
+  secretRun=null; gravMul=1; hasKey=false;
+  hasRay=false; rayCD=0; rayFx=null;
+  levelData = genTutorialLevel();
+  enemies   = spawnEnemies(levelData.enemies);
+  projs=[]; pickups=[]; hazards=[]; boss=null; parts=[];
+  checkActivated=false; checkpointRespawn=null;
+  cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
+  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  lastSafeGround={...levelData.playerStart};
+  tut={ i:0, jumps:0, blocks:0, held:0, mercyT:0, flash:'', flashT:0 };
+  enterTutStep(0);
+  G.screen='PLAYING';
+}
+
+// Falling is a lesson, not a punishment: each step parks the respawn point inside
+// itself, so the worst a mistake costs is the walk back to where you were.
+function enterTutStep(i){
+  tut.i=i; tut.held=0; tut.mercyT=0;
+  const s=TUT_STEPS[i];
+  if(s) checkpointRespawn={ x:s.safeX, y:GROUND_Y-PHIL_H-1 };
+}
+
+function tutAdvance(msg){
+  tut.flash=msg; tut.flashT=1.5;
+  if(tut.i+1<TUT_STEPS.length){ enterTutStep(tut.i+1); SFX.checkpoint(); }
+}
+
+function updateTutorial(dt){
+  if(!tut||phil.dead) return;
+  if(tut.flashT>0) tut.flashT-=dt;
+  const s=tutStep();
+  if(!s) return;
+  tut.held+=dt;
+  if(s.mercy) tut.mercyT+=dt;
+  if(s.done()){ tutAdvance('Got it!'); return; }
+  // The two steps that ask for a skill let go after a while rather than trapping
+  // anyone who can't land it
+  if(s.mercy&&tut.mercyT>=s.mercy) tutAdvance('Good enough — moving on');
+}
+
+// The red flag is the one hard gate in the tutorial: without it a player could
+// sprint past the archer and finish having learned nothing about the shield.
+function tutorialFlagTouch(){
+  if(tut.i>=TUT_STEPS.length-1){ tutorialFinish(); return; }
+  if(tut.flashT<=0){ tut.flash='Finish the drill first!'; tut.flashT=1.6; SFX.broke(); }
+  phil.x=levelData.flagX-72; phil.vx=0;
+}
+
+function markTutorialDone(){
+  tutorialDone=true;
+  try{ localStorage.setItem(TUT_KEY,'done'); }catch(e){}
+}
+
+function tutorialFinish(){
+  markTutorialDone();
+  SFX.win();
+  burst(levelData.flagX,levelData.flagY-20,'#ff3322',18,130,0);
+  G.screen='TUTORIAL_DONE';
+}
+
+// Skipping counts as done. Being asked again every time you start a new game is
+// worse than missing it — the title always has it if you want it back.
+function skipTutorial(){
+  markTutorialDone();
+  exitTutorial();
+}
+
+function exitTutorial(){
+  const to=tutReturn, keep=tutKeep;
+  tut=null; tutKeep=null; paused=false;
+  if(keep){ G.mode=keep.mode; G.world=keep.world; G.level=keep.level;
+            G.score=keep.score; G.lives=keep.lives; }
+  else G.mode='CAMPAIGN';
+  if(to==='CAMPAIGN'){ playCutscene('intro',startLevel); return; }
+  titleKeyHeld=true; G.screen='TITLE';
+}
+
 function nextLevel(){
   G.level++;
   if(G.level>10){
@@ -1608,7 +1800,7 @@ function rushNextFight(){
 }
 
 function canUseWorldCheat(){
-  return G.screen==='PLAYING' && G.mode!=='RUSH' && !paused && phil && !phil.dead;
+  return G.screen==='PLAYING' && G.mode==='CAMPAIGN' && !paused && phil && !phil.dead;
 }
 function handleWorldCheatInput(key){
   if(!canUseWorldCheat()){ resetWorldCheat(); return; }
@@ -1759,7 +1951,9 @@ function updatePhil(dt){
   if(In.jump()) phil.jumpBuffer=0.12;
   if(phil.jumpBuffer>0){
     phil.jumpBuffer-=dt;
-    if(phil.onGround){ phil.vy=boosted?SPEED_JUMP:-620; phil.jumpBuffer=0; SFX.jump(); dustPuff(phil.x+phil.w/2,phil.y+phil.h); }
+    if(phil.onGround){ phil.vy=boosted?SPEED_JUMP:-620; phil.jumpBuffer=0; SFX.jump(); dustPuff(phil.x+phil.w/2,phil.y+phil.h);
+      if(tut) tut.jumps++;                      // counted at the source of truth
+    }
   }
 
   // Attack — while Phil is holding the shrink ray, Z fires that instead of the
@@ -1844,7 +2038,11 @@ function updatePhil(dt){
       // Shield block check (only arrows blockable)
       if(phil.shielding&&p.type==='arrow'){
         const fromRight=p.vx<0, facingRight=phil.facingR;
-        if(fromRight===facingRight){ p.dead=true; burst(p.x,p.y,'#88ccff',6,70,0); SFX.block(); continue; }
+        if(fromRight===facingRight){
+          p.dead=true; burst(p.x,p.y,'#88ccff',6,70,0); SFX.block();
+          if(tut) tut.blocks++;
+          continue;
+        }
       }
       p.dead=true; philTakeDmg(0.5); break;
     }
@@ -1901,7 +2099,11 @@ function updatePhil(dt){
   // Red flag (level end)
   if(levelData.flagX&&!boss){
     const flagBox={x:levelData.flagX-15,y:levelData.flagY-80,w:30,h:90};
-    if(overlap(phil,flagBox)){ if(secretRun) secretComplete(); else levelComplete(); }
+    if(overlap(phil,flagBox)){
+      if(tut) tutorialFlagTouch();
+      else if(secretRun) secretComplete();
+      else levelComplete();
+    }
   }
 }
 
@@ -1953,6 +2155,9 @@ function philDie(){
   burst(phil.x+phil.w/2,phil.y+phil.h/2,'#4488ff',20,150,400);
   SFX.die(); shake=0.7;
   combo=0; comboTimer=0;
+  // Nobody runs out of lives in a tutorial. The step's own respawn point puts
+  // Phil back where he was, and the lesson carries on.
+  if(tut){ setTimeout(()=>{ if(tut) respawnPhil(); },1200); return; }
   G.lives--;
   if(G.lives>0){
     setTimeout(()=>{ respawnPhil(); },1800);
@@ -2422,7 +2627,8 @@ function hitEnemy(e, dmg){
     scorePopup(e.x+e.w/2,e.y-20,popTxt,popCol);
     if(combo>=3){ burst(e.x+e.w/2,e.y+e.h/2,combo>=5?'#ff88ff':'#ffaa00',16,150,300); SFX.coin(); }
     burst(e.x+e.w/2,e.y+e.h/2,'#ff4422',14,130,350); SFX.die();
-    spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
+    // No coins from the tutorial — it is replayable, and a drill shouldn't pay
+    if(!tut) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
     if(e.type==='heavy'&&Math.random()<0.5) spawnHealthPickup(e);
   }
 }
@@ -4516,6 +4722,113 @@ function drawWeaponBox(){
   ctx.textAlign='left';
 }
 
+// The instruction panel. It sits under the HUD bar rather than along the bottom
+// because on a phone in landscape the control pad overlays the lower third of the
+// canvas — and this is the one thing in the game that must always be readable.
+function drawKeyCap(label,x,y){
+  ctx.font='bold 12px monospace';
+  const w=Math.max(26,ctx.measureText(label).width+16), h=22;
+  ctx.fillStyle='rgba(120,200,255,0.16)';
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle='#7fd0ff'; ctx.lineWidth=1.5; ctx.strokeRect(x+.5,y+.5,w-1,h-1);
+  ctx.fillStyle='#dff2ff'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(label,x+w/2,y+h/2+1);
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  return w;
+}
+
+function wrapLine(text,maxW,font){
+  ctx.font=font;
+  const out=[]; let line='';
+  for(const word of text.split(' ')){
+    const next=line?line+' '+word:word;
+    if(line&&ctx.measureText(next).width>maxW){ out.push(line); line=word; }
+    else line=next;
+  }
+  if(line) out.push(line);
+  return out;
+}
+
+function drawTutorialPanel(){
+  if(!tut) return;
+  const s=tutStep();
+  if(!s) return;
+  const caps = isTouchDevice ? s.touch : s.keys;
+  const bw=560, bx=(W-bw)/2, by=58;
+  const body=wrapLine(s.body,bw-36,'13px monospace');
+  const bh=52+body.length*17+(caps.length?30:6);
+
+  ctx.fillStyle='rgba(6,14,22,0.88)'; ctx.fillRect(bx,by,bw,bh);
+  ctx.strokeStyle='#7fd0ff'; ctx.lineWidth=2; ctx.strokeRect(bx+1,by+1,bw-2,bh-2);
+  // Progress rail along the top edge — how far through the drills you are
+  const done=tut.i/(TUT_STEPS.length-1);
+  ctx.fillStyle='rgba(127,208,255,0.25)'; ctx.fillRect(bx+2,by+2,bw-4,3);
+  ctx.fillStyle='#7fd0ff'; ctx.fillRect(bx+2,by+2,(bw-4)*done,3);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffffff'; ctx.font='bold 17px monospace';
+  ctx.fillText(s.title,W/2,by+30);
+  ctx.fillStyle='#a9c4d4'; ctx.font='13px monospace';
+  body.forEach((l,i)=>ctx.fillText(l,W/2,by+50+i*17));
+  ctx.textAlign='left';
+
+  if(caps.length){
+    const gap=8;
+    ctx.font='bold 12px monospace';
+    const widths=caps.map(c=>Math.max(26,ctx.measureText(c).width+16));
+    let cx=W/2-(widths.reduce((a,b)=>a+b,0)+gap*(caps.length-1))/2;
+    const cy=by+bh-28;
+    caps.forEach((c,i)=>{ drawKeyCap(c,cx,cy); cx+=widths[i]+gap; });
+  }
+
+  // "Got it!" confirmation, floating just under the panel
+  if(tut.flashT>0){
+    ctx.globalAlpha=Math.min(1,tut.flashT*1.8);
+    ctx.textAlign='center';
+    ctx.fillStyle='#8fe08a'; ctx.font='bold 16px monospace';
+    ctx.fillText(tut.flash,W/2,by+bh+22);
+    ctx.globalAlpha=1; ctx.textAlign='left';
+  }
+}
+
+function drawTutorialDone(){
+  ctx.fillStyle='rgba(4,10,16,0.9)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#44ff88'; ctx.shadowBlur=20;
+  ctx.fillStyle='#7dffb0'; ctx.font='bold 46px monospace';
+  ctx.fillText("YOU'RE READY",W/2,124);
+  ctx.restore();
+  ctx.fillStyle='#a9c4d4'; ctx.font='15px monospace';
+  ctx.fillText('That is everything Phil can do. The rest is up to you.',W/2,158);
+
+  const rows=[
+    ['Move and jump','Cross gaps, climb to high platforms'],
+    ['Attack','Two hits beats a soldier; big ones take more'],
+    ['Shield','Only stops arrows hitting Phil at the front'],
+    ['Five hearts','Every hit costs half — ten hits and you are out'],
+    ['Blue flag','Checkpoint. Die after it and you restart there'],
+    ['Red flag','The end of the level'],
+  ];
+  rows.forEach((r,i)=>{
+    const y=200+i*38;
+    ctx.fillStyle='rgba(127,208,255,0.09)'; ctx.fillRect(W/2-290,y-20,580,32);
+    ctx.textAlign='right';
+    ctx.fillStyle='#7fd0ff'; ctx.font='bold 14px monospace';
+    ctx.fillText(r[0],W/2-30,y);
+    ctx.textAlign='left';
+    ctx.fillStyle='#c9d8e2'; ctx.font='13px monospace';
+    ctx.fillText(r[1],W/2-10,y);
+  });
+
+  ctx.textAlign='center';
+  if(Math.sin(frameN*.07)>0){
+    ctx.fillStyle='#ffffff'; ctx.font='bold 17px monospace';
+    ctx.fillText(isTouchDevice?'TAP TO START':'PRESS ENTER TO START',W/2,H-30);
+  }
+  ctx.textAlign='left';
+}
+
 function drawHUD(){
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,W,48);
   // Hearts
@@ -4553,7 +4866,10 @@ function drawHUD(){
   // Level indicator
   ctx.textAlign='center'; ctx.fillStyle='#ccaaff'; ctx.font='12px monospace';
   const isBoss=(G.level===5||G.level===10);
-  if(secretRun){
+  if(tut){
+    ctx.fillStyle='#7fd0ff';
+    ctx.fillText(`HOW TO PLAY  -  STEP ${Math.min(tut.i+1,TUT_STEPS.length)} OF ${TUT_STEPS.length}`,W/2,38);
+  } else if(secretRun){
     ctx.fillStyle='#ffd54a';
     ctx.fillText(`★ SECRET AREA - ${SECRET_META[secretRun.theme].name} ★`,W/2,38);
   } else if(G.mode==='RUSH'){
@@ -4641,6 +4957,8 @@ function drawHUD(){
     ctx.fillText(checkActivated?'CHECKPOINT ✓':'CHECKPOINT',W-10,20);
     ctx.textAlign='left';
   }
+
+  drawTutorialPanel();
 }
 
 // ─── FLAG DRAWING ───
@@ -6211,6 +6529,7 @@ function titleItems(){
   items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
   items.push({ id:'rush', label:()=>'BOSS RUSH' });
+  items.push({ id:'tutorial', label:()=>'HOW TO PLAY' });
   items.push({ id:'shop', label:()=>'WEAPON SHOP  ('+shop.coins+' coins)' });
   items.push({ id:'skin', label:()=>'SKIN: '+skinDef().name });
   items.push({ id:'music', label:()=>'MUSIC: '+(musicOn?'ON':'OFF') });
@@ -6218,9 +6537,10 @@ function titleItems(){
 }
 function titleBox(i,count){
   const n=count||titleItems().length;
-  // Tightens up as rows are added, so the footer never runs off the canvas
+  // Tightens up as rows are added, so the footer never runs off the canvas. At 7+
+  // the worlds subtitle is dropped too (see drawTitle) to buy back the space.
   const gap=n>=7?24:(n>=6?27:(n>=5?28:32)), h=n>=7?22:(n>=6?25:(n>=5?26:28));
-  const top=n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372)));
+  const top=n>=8?316:(n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372))));
   return { x:W/2-160, y:top+i*gap, w:320, h };
 }
 
@@ -6234,6 +6554,9 @@ function cycleSkin(dir){
 function startNewCampaign(){
   clearSave();
   G.mode='CAMPAIGN'; G.world=1;G.level=1;G.score=0;G.lives=3; G.seenCuts={};
+  // First time anyone starts a game, they get taught the controls before the
+  // story starts. It's skippable, and skipping counts — nobody is asked twice.
+  if(!tutorialDone){ startTutorial('CAMPAIGN'); return; }
   playCutscene('intro',startLevel);
 }
 
@@ -6255,6 +6578,8 @@ function titleActivate(){
     openMap();
   } else if(id==='rush'){
     startRushRun();
+  } else if(id==='tutorial'){
+    startTutorial('TITLE');
   } else if(id==='shop'){
     openShop('TITLE');
   } else if(id==='music'){
@@ -6322,12 +6647,13 @@ function drawTitle(){
 
   ctx.fillStyle='#aaccaa'; ctx.font='16px monospace';
   ctx.fillText('A Stickman Warrior fights for freedom',W/2,300);
-  ctx.fillStyle='#667766'; ctx.font='12px monospace';
-  ctx.fillText('Forest  •  Desert  •  Snow Peaks  •  Factory 999  •  Mines  •  Berlin',W/2,326);
-
   // Menu
   const items=titleItems();
-  // The tagline is the first thing to go when a fifth row needs the space
+  ctx.fillStyle='#667766'; ctx.font='12px monospace';
+  // Decoration goes before menu rows do. The worlds line is the next to go after
+  // the tagline, and the world map lists them properly anyway.
+  if(items.length<7)
+    ctx.fillText('Forest  •  Desert  •  Snow Peaks  •  Factory 999  •  Mines  •  Berlin',W/2,326);
   if(items.length<5) ctx.fillText('13 boss fights, then the final Stickman Mech showdown',W/2,344);
   for(let i=0;i<items.length;i++){
     const b=titleBox(i,items.length), sel=(i===titleSelect);
@@ -6346,23 +6672,32 @@ function drawTitle(){
     }
   }
   const bottom=titleBox(items.length-1,items.length).y+28;
+  const hint=isTouchDevice?'Tap a menu option'
+                          :'Arrows/WASD: Select   Enter: Choose   M: Music';
+  // At eight rows there is only room for one footer line, so the stats and the
+  // controls share it and the locked-skin detail drops (Boss Rush reports it)
+  const oneLine=items.length>=8;
+  const locked=SKIN_ORDER.filter(s=>!unlockedSkins.has(s));
+  const stats='HIGH SCORE: '+G.highScore+(rush.best?'   RUSH: '+rush.best:'')+
+    '   SECRETS: '+secretsFound.size+'/'+SECRET_TOTAL;
+
   if(titleConfirm){
     ctx.fillStyle='#ff9966'; ctx.font='12px monospace';
     ctx.fillText('Press again to wipe your saved progress, or pick something else',W/2,bottom+16);
-  } else {
-    // One stats line: six menu rows only leave room for two footer lines, so the
-    // locked-skin detail rides along here and the map panel carries the
-    // per-level secret detail.
-    const locked=SKIN_ORDER.filter(s=>!unlockedSkins.has(s));
+    if(!oneLine){
+      ctx.fillStyle='#445544'; ctx.font='11px monospace';
+      ctx.fillText(hint,W/2,bottom+32);
+    }
+  } else if(oneLine){
     ctx.fillStyle='#556644'; ctx.font='11px monospace';
-    ctx.fillText('HIGH SCORE: '+G.highScore+(rush.best?'   RUSH: '+rush.best:'')+
-      '   SECRETS: '+secretsFound.size+'/'+SECRET_TOTAL+
-      (locked.length?'   LOCKED SKINS: '+locked.map(s=>SKINS[s].name).join(', ')
-                    :'   ★ ALL SKINS UNLOCKED ★'),W/2,bottom+16);
+    ctx.fillText(stats+'      '+hint,W/2,bottom+16);
+  } else {
+    ctx.fillStyle='#556644'; ctx.font='11px monospace';
+    ctx.fillText(stats+(locked.length?'   LOCKED SKINS: '+locked.map(s=>SKINS[s].name).join(', ')
+                                     :'   ★ ALL SKINS UNLOCKED ★'),W/2,bottom+16);
+    ctx.fillStyle='#445544'; ctx.font='11px monospace';
+    ctx.fillText(hint,W/2,bottom+32);
   }
-  ctx.fillStyle='#445544'; ctx.font='11px monospace';
-  ctx.fillText(isTouchDevice?'Tap a menu option'
-    :'Arrows/WASD: Select   Enter: Choose   M: Music',W/2,bottom+32);
   ctx.textAlign='left';
 }
 
@@ -6470,7 +6805,14 @@ function drawWin(){
 // Built fresh so the music row shows its current state
 // Keyed by id rather than position: the actions used to be a chain of index
 // comparisons, so inserting a row silently rewired every one below it.
-const pauseItems = ()=>[
+const pauseItems = ()=> tut ? [
+  // The campaign items would all misfire here — RESTART LEVEL builds a generated
+  // level, and the map and shop have nothing to do with a drill
+  { id:'resume',   label:'RESUME' },
+  { id:'tutstart', label:'START THE TUTORIAL OVER' },
+  { id:'music',    label:'MUSIC: '+(musicOn?'ON':'OFF') },
+  { id:'tutskip',  label:'SKIP THE TUTORIAL' },
+] : [
   { id:'resume',  label:'RESUME' },
   { id:'restart', label:'RESTART LEVEL' },
   { id:'shop',    label:'WEAPON SHOP  ('+shop.coins+')' },
@@ -7242,6 +7584,14 @@ function loop(ts){
     else drawTitle();
     drawShop(); handleShopInput(dt); return;
   }
+  // --- TUTORIAL COMPLETE ---
+  if(G.screen==='TUTORIAL_DONE'){
+    drawBackground(); drawPlatforms(); drawDecorations(); drawTutorialDone();
+    if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#7dffb0',10,140,0);
+    updateParts(dt); drawParts();
+    if(In.restart()){ exitTutorial(); }
+    return;
+  }
   // --- BOSS RUSH COMPLETE ---
   if(G.screen==='RUSH_COMPLETE'){ drawRushComplete(); if(Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#'+Math.floor(Math.random()*0xffffff).toString(16),12,150,0); updateParts(dt); drawParts(); if(In.restart()){ G.mode='CAMPAIGN'; G.screen='TITLE'; } return; }
   // --- CUTSCENE ---
@@ -7299,6 +7649,8 @@ function loop(ts){
         keys['Enter']=false; keys['Space']=false;
         const id=pauseItems()[pauseSelect].id;
         if(id==='resume'){ paused=false; }
+        else if(id==='tutstart'){ paused=false; startTutorial(tutReturn); }
+        else if(id==='tutskip'){ skipTutorial(); }
         else if(id==='restart'){ paused=false; G.lives=3; startLevel(); }
         else if(id==='shop'){ paused=false; openShop('PLAYING'); }
         else if(id==='music'){ toggleMusic(); }             // stay paused
@@ -7333,6 +7685,7 @@ function loop(ts){
       updateProjs(dt);
       updatePickups(dt);
       updateHazards(dt);
+      updateTutorial(dt);    // after the world moves: steps read the settled state
       updateCam(dt);
       updateParts(dt);
     }
