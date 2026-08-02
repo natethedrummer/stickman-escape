@@ -973,6 +973,206 @@ const TUT_STEPS = [
     done:()=> false },                       // the flag itself ends the tutorial
 ];
 
+// ══════════════════════════════════════════════════════
+//  TRAINING DRILLS
+// ══════════════════════════════════════════════════════
+// Four short arenas, each one about a single skill. They run as their own mode
+// with campaign progress parked, the same way the tutorial does — the difference
+// is that the tutorial teaches and these score you.
+//
+// Each drill is a config, not a special case: an arena, a per-frame tick, a HUD
+// line and a number to beat. Three of the four are configuration of systems the
+// game already has (archers shoot, enemies chase, flags finish); only the sword
+// drill needed a new thing to hit.
+const TRAIN_TIME = 30;                  // seconds, for every timed drill
+
+function trainGround(worldW, extra, ground){
+  const plats=(ground===false?[]:[{x:0,y:GROUND_Y,w:worldW,h:20}]).concat(extra||[]);
+  const decorations=[];
+  for(let i=0;i<20;i++) decorations.push({
+    type:(WORLDS[G.world]?.deco||['tree'])[i%(WORLDS[G.world]?.deco||['tree']).length],
+    x:Math.floor((i*163+40)%worldW), scale:0.5+((i*29)%70)/100, layer:i%2 });
+  return { worldW, plats, enemies:[], decorations, hazards:[], powerups:[],
+    hasMovers:false, key:null, door:null, checkX:null, checkY:null,
+    flagX:null, flagY:null, playerStart:{x:60,y:GROUND_Y-PHIL_H-1},
+    isBoss:false, isTraining:true };
+}
+
+const TRAIN_POST_Y = GROUND_Y-42;       // chest height — hittable standing up
+
+const TRAINING = {
+  sword: {
+    // ~17 hits is a clean 30s (a post is ~350px away, Phil runs 240px/s), so 10
+    // is a real bar without needing a perfect run
+    name:'SWORD TIMING', world:1, target:10, unit:'hits',
+    blurb:'One target lights at a time. Hit it, then the next.',
+    build(){
+      const d=trainGround(1300);
+      d.playerStart={x:640,y:GROUND_Y-PHIL_H-1};
+      return d;
+    },
+    start(){
+      train.posts=[220,450,660,870,1100].map(x=>({x,lit:false}));
+      train.lit=0; train.posts[0].lit=true; train.score=0; train.flash=0;
+    },
+    update(dt){
+      if(train.flash>0) train.flash-=dt;
+      if(!phil.attacking) return;
+      const rng=curWeapon().range||ATK_RANGE;
+      const ax=phil.facingR?phil.x+phil.w:phil.x-rng;
+      const box={x:ax,y:phil.y+8,w:rng,h:28};
+      const p=train.posts[train.lit];
+      const pb={x:p.x-16,y:TRAIN_POST_Y-16,w:32,h:32};
+      if(!overlap(box,pb)||train.hitGuard) return;
+      train.hitGuard=true;                       // one hit per swing
+      train.score++; train.flash=0.25;
+      SFX.coin(); burst(p.x,TRAIN_POST_Y,'#ffe14d',12,120,0);
+      p.lit=false;
+      // Never light the one you are standing at — every point costs a run
+      let next; do { next=Math.floor(Math.random()*train.posts.length); }
+      while(train.posts.length>1 && next===train.lit);
+      train.lit=next; train.posts[next].lit=true;
+    },
+    draw(){
+      for(const p of train.posts){
+        const px=p.x-cam.x, py=TRAIN_POST_Y-cam.y;
+        ctx.strokeStyle='#6a5a3a'; ctx.lineWidth=5;
+        ctx.beginPath(); ctx.moveTo(px,py+14); ctx.lineTo(px,GROUND_Y-cam.y); ctx.stroke();
+        if(p.lit){
+          ctx.fillStyle='rgba(255,225,77,0.28)';
+          ctx.beginPath(); ctx.arc(px,py,24+Math.sin(frameN*.18)*3,0,Math.PI*2); ctx.fill();
+        }
+        ctx.fillStyle=p.lit?'#ffe14d':'#4a4636';
+        ctx.beginPath(); ctx.arc(px,py,16,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle=p.lit?'#fff6c0':'#2e2b22'; ctx.lineWidth=2.5;
+        ctx.beginPath(); ctx.arc(px,py,16,0,Math.PI*2); ctx.stroke();
+        ctx.fillStyle=p.lit?'#a8791a':'#2e2b22';
+        ctx.beginPath(); ctx.arc(px,py,6,0,Math.PI*2); ctx.fill();
+      }
+    },
+  },
+
+  shield: {
+    // ~32 arrows come in over 30s and score is blocks minus hits, so standing
+    // still facing one way scores exactly 0. 6 needs real turning, not perfection
+    name:'SHIELD DRILL', world:2, target:6, unit:'blocked',
+    blurb:'Two archers. Face the one shooting and block.',
+    build(){
+      // Perch height is set by the archer AI, not by taste: it only looses an
+      // arrow when |dy| < 160. At GROUND_Y-170 that came out at 168 and the pair
+      // of them stood there silently for the whole drill. GROUND_Y-100 puts dy
+      // near 98, comfortably inside it.
+      const perchL={x:240,y:GROUND_Y-100,w:130,h:14};
+      const perchR={x:530,y:GROUND_Y-100,w:130,h:14};
+      const d=trainGround(900,[perchL,perchR]);
+      d.playerStart={x:435,y:GROUND_Y-PHIL_H-1};
+      d.enemies=[
+        {type:'archer',x:290,y:perchL.y-ENEMY_CFG.archer.h,pL:perchL.x+4,pR:perchL.x+perchL.w-4},
+        {type:'archer',x:580,y:perchR.y-ENEMY_CFG.archer.h,pL:perchR.x+4,pR:perchR.x+perchR.w-4},
+      ];
+      return d;
+    },
+    start(){
+      train.score=0; train.taken=0;
+      // Woken on purpose rather than left to notice him, so the drill starts
+      // firing immediately. Once alerted they stay alerted (the AI only gives up
+      // past 360px, and these sit well inside that).
+      for(const e of enemies) alertEnemy(e);
+      // No dying in a shield drill — an arrow through the guard costs a point,
+      // which is the lesson, rather than ending the run
+      phil.maxHealth=99; phil.health=99;
+    },
+    update(dt){
+      // At this height Phil can jump-attack the perches. Cutting down both
+      // archers would leave nothing to block and a drill you cannot finish, so a
+      // downed one is back up two seconds later.
+      for(const e of enemies){
+        if(!e.dead) continue;
+        e.reviveT=(e.reviveT||0)+dt;
+        if(e.reviveT<2) continue;
+        e.reviveT=0;
+        e.dead=false; e.deathTimer=0; e.health=e.maxHealth;
+        e.x=(e.pL+e.pR)/2-e.w/2; e.y=e.homeY; e.vx=0; e.vy=0;
+        alertEnemy(e);
+        burst(e.x+e.w/2,e.y+e.h/2,'#88ccff',14,120,0);
+      }
+    },
+    draw(){},
+  },
+
+  parkour: {
+    name:'PARKOUR RUN', world:3, target:22, unit:'seconds', lower:true, timed:false,
+    blurb:'Reach the red flag. Falling does not stop the clock.',
+    build(){
+      // No floor under the course. With continuous ground you could ignore every
+      // platform and jog to the flag, which is not a parkour run — falling has to
+      // cost something, and here it costs the climb back with the clock running.
+      // Rises top out at 90 and gaps at 110: a jump clears 120 up and ~186
+      // across, so every step is possible and none of it is generous.
+      const steps=[
+        [260,GROUND_Y-80,120],[470,GROUND_Y-150,110],[690,GROUND_Y-210,100],
+        [900,GROUND_Y-150,110],[1110,GROUND_Y-230,100],[1320,GROUND_Y-160,120],
+        [1540,GROUND_Y-250,100],[1750,GROUND_Y-180,110],[1960,GROUND_Y-110,140],
+      ].map(s=>({x:s[0],y:s[1],w:s[2],h:14}));
+      const d=trainGround(2400,steps,false);
+      d.plats.unshift({x:0,y:GROUND_Y,w:220,h:20});          // start pad
+      d.plats.push({x:2160,y:GROUND_Y-110,w:240,h:20});      // finish ledge
+      d.flagX=2280; d.flagY=GROUND_Y-110;
+      return d;
+    },
+    start(){ train.score=0; },
+    update(){ train.score=train.t; },
+    draw(){},
+  },
+
+  survive: {
+    name:'SURVIVAL', world:6, target:8, unit:'beaten',
+    blurb:'Survive 30 seconds and drop as many as you can.',
+    build(){
+      const d=trainGround(1200,[{x:330,y:GROUND_Y-110,w:150,h:14},
+                                {x:720,y:GROUND_Y-110,w:150,h:14}]);
+      d.playerStart={x:580,y:GROUND_Y-PHIL_H-1};
+      return d;
+    },
+    start(){ train.score=0; train.wave=0; train.spawnT=1.2; },
+    update(dt){
+      train.spawnT-=dt;
+      if(train.spawnT>0) return;
+      train.wave++;
+      // Tightens from 2.4s down to 1.0s, and the roster hardens as it goes
+      train.spawnT=Math.max(1.0,2.4-train.wave*0.09);
+      const pool = train.wave<4 ? ['soldier']
+                 : train.wave<8 ? ['soldier','archer']
+                 : ['soldier','archer','bomber','heavy'];
+      const type=pool[Math.floor(Math.random()*pool.length)];
+      const left=Math.random()<0.5;
+      const x=left?20:levelData.worldW-40;
+      const e=spawnEnemies([{type,x,y:GROUND_Y-ENEMY_CFG[type].h,pL:10,pR:levelData.worldW-30}])[0];
+      alertEnemy(e);
+      enemies.push(e);
+      burst(x+11,GROUND_Y-20,'#ff8844',8,80,0);
+    },
+    draw(){},
+  },
+};
+const TRAIN_ORDER = ['sword','shield','parkour','survive'];
+
+const TRAIN_KEY='pe_train';
+function loadTrain(){
+  try{
+    const s=JSON.parse(localStorage.getItem(TRAIN_KEY));
+    if(s&&typeof s==='object')
+      return { best:(s.best&&typeof s.best==='object')?s.best:{},
+               cleared:new Set((s.cleared||[]).filter(id=>TRAINING[id])) };
+  }catch(e){}
+  return { best:{}, cleared:new Set() };
+}
+let trainRec = loadTrain();
+function saveTrain(){
+  try{ localStorage.setItem(TRAIN_KEY,JSON.stringify({
+    best:trainRec.best, cleared:[...trainRec.cleared] })); }catch(e){}
+}
+
 const TUT_KEY='pe_tutorial';
 let tutorialDone = localStorage.getItem(TUT_KEY)==='done';
 let tut = null;                 // { i, jumps, blocks, held, mercyT, flash, ... } while running
@@ -1735,7 +1935,173 @@ function exitTutorial(){
             G.score=keep.score; G.lives=keep.lives; }
   else G.mode='CAMPAIGN';
   if(to==='CAMPAIGN'){ playCutscene('intro',startLevel); return; }
+  if(to==='PRACTICE'){ openPractice(true); return; }
   titleKeyHeld=true; G.screen='TITLE';
+}
+
+// ── TRAINING FLOW ──
+const TRAIN_REWARD = 50;            // one-off, the first time a drill is passed
+let train = null;                   // { id, t, score, done, ... } while running
+let trainKeep = null;               // campaign state parked for the duration
+
+function trainDef(){ return train ? TRAINING[train.id] : null; }
+function trainScoreNow(){ return train.id==='parkour' ? train.t : train.score; }
+function fmtTrain(id,v){
+  if(v==null) return '—';
+  return id==='parkour' ? v.toFixed(2)+'s' : String(v);
+}
+
+function startTraining(id){
+  const d=TRAINING[id];
+  if(!d) return;
+  initAC();
+  trainKeep={ mode:G.mode, world:G.world, level:G.level, score:G.score, lives:G.lives };
+  G.mode='TRAINING'; G.world=d.world; G.level=1; G.score=0; G.lives=3;
+  secretRun=null; gravMul=1; hasKey=false;
+  hasRay=false; rayCD=0; rayFx=null;
+  tut=null; dlg=null;
+  train={ id, t:0, score:0, done:false, hitGuard:false };
+  levelData = d.build();
+  enemies   = spawnEnemies(levelData.enemies);
+  projs=[]; pickups=[]; hazards=[]; boss=null; parts=[];
+  checkActivated=false; checkpointRespawn=null;
+  cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
+  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  lastSafeGround={...levelData.playerStart};
+  d.start();
+  G.screen='PLAYING';
+}
+
+function updateTraining(dt){
+  if(!train||train.done||phil.dead) return;
+  const d=trainDef();
+  train.t+=dt;
+  if(!phil.attacking) train.hitGuard=false;      // one score per swing, not per frame
+  d.update(dt);
+  if(d.timed!==false && train.t>=TRAIN_TIME) finishTraining();
+}
+
+// Parkour is the only drill that ends on the flag rather than the clock
+function trainFlagTouch(){
+  if(train.id==='parkour') finishTraining();
+}
+
+function trainPhilDied(){
+  if(train.id==='survive'){
+    // Dying IS the end of a survival run — but let the death play out first
+    setTimeout(()=>{ if(train&&!train.done) finishTraining(); },1400);
+    return;
+  }
+  setTimeout(()=>{ if(train&&!train.done) respawnPhil(); },1000);
+}
+
+function finishTraining(){
+  if(!train||train.done) return;
+  train.done=true;
+  const d=trainDef();
+  const score = train.id==='parkour' ? +train.t.toFixed(2) : train.score;
+  const passed = d.lower ? score<=d.target : score>=d.target;
+  const prev = trainRec.best[train.id];
+  const better = prev==null || (d.lower ? score<prev : score>prev);
+
+  train.final=score; train.passed=passed; train.newBest=better; train.prev=prev;
+  if(better) trainRec.best[train.id]=score;
+  train.coins=0;
+  // Paid once per drill, ever. A drill you can replay for coins is a coin farm,
+  // and the shop is meant to be earned in the campaign.
+  if(passed && !trainRec.cleared.has(train.id)){
+    trainRec.cleared.add(train.id);
+    train.coins=addCoins(TRAIN_REWARD);
+  }
+  saveTrain();
+  if(passed) SFX.win(); else SFX.clear();
+  G.screen='TRAIN_DONE';
+}
+
+function exitTraining(){
+  const keep=trainKeep;
+  train=null; trainKeep=null; paused=false;
+  if(keep){ G.mode=keep.mode; G.world=keep.world; G.level=keep.level;
+            G.score=keep.score; G.lives=keep.lives; }
+  else G.mode='CAMPAIGN';
+  openPractice(true);
+}
+
+// ── HUD + RESULT ──
+function drawTrainingHUD(){
+  if(!train||paused) return;
+  const d=trainDef();
+  const bw=386, bx=(W-bw)/2, by=54, bh=44;
+  ctx.fillStyle='rgba(6,12,20,0.86)'; ctx.fillRect(bx,by,bw,bh);
+  ctx.strokeStyle='#ffd54a'; ctx.lineWidth=2; ctx.strokeRect(bx+1,by+1,bw-2,bh-2);
+
+  ctx.textAlign='left';
+  ctx.fillStyle='#ffd54a'; ctx.font='bold 12px monospace';
+  ctx.fillText(d.name,bx+12,by+18);
+  ctx.fillStyle='#8a8256'; ctx.font='10px monospace';
+  ctx.fillText('BEAT '+fmtTrain(train.id,d.target),bx+12,by+34);
+
+  // The clock counts down on the timed drills and up on the parkour run, because
+  // on parkour the number IS the score
+  const left=Math.max(0,TRAIN_TIME-train.t);
+  const clock = d.timed===false ? train.t.toFixed(2)+'s' : left.toFixed(1)+'s';
+  ctx.textAlign='center';
+  ctx.fillStyle=(d.timed!==false&&left<6)?'#ff7766':'#ffffff';
+  ctx.font='bold 20px monospace';
+  ctx.fillText(clock,bx+bw/2+28,by+29);
+
+  ctx.textAlign='right';
+  ctx.fillStyle='#ffffff'; ctx.font='bold 20px monospace';
+  if(d.timed!==false) ctx.fillText(String(train.score),bx+bw-12,by+24);
+  ctx.fillStyle='#8a8256'; ctx.font='10px monospace';
+  ctx.fillText(d.timed!==false?d.unit:'best '+fmtTrain(train.id,trainRec.best[train.id]),
+    bx+bw-12,by+37);
+  ctx.textAlign='left';
+}
+
+function drawTrainDone(){
+  const d=trainDef();
+  ctx.fillStyle='rgba(4,8,14,0.9)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor=train.passed?'#44ff88':'#ffbb55'; ctx.shadowBlur=18;
+  ctx.fillStyle=train.passed?'#7dffb0':'#ffd54a'; ctx.font='bold 42px monospace';
+  ctx.fillText(train.passed?'DRILL PASSED':'GOOD RUN',W/2,120);
+  ctx.restore();
+  ctx.fillStyle='#a9c4d4'; ctx.font='15px monospace';
+  ctx.fillText(d.name,W/2,152);
+
+  const rows=[
+    ['YOUR SCORE', fmtTrain(train.id,train.final)],
+    ['TO PASS',    fmtTrain(train.id,d.target)],
+    ['YOUR BEST',  fmtTrain(train.id,trainRec.best[train.id])+(train.newBest?'   ★ NEW':'')],
+  ];
+  rows.forEach((r,i)=>{
+    const y=212+i*42;
+    ctx.fillStyle='rgba(255,213,74,0.08)'; ctx.fillRect(W/2-230,y-24,460,34);
+    ctx.textAlign='left';  ctx.fillStyle='#8a8256'; ctx.font='bold 13px monospace';
+    ctx.fillText(r[0],W/2-214,y);
+    ctx.textAlign='right'; ctx.fillStyle='#ffffff'; ctx.font='bold 17px monospace';
+    ctx.fillText(r[1],W/2+214,y);
+  });
+
+  ctx.textAlign='center';
+  if(train.coins>0){
+    ctx.fillStyle='#ffd700'; ctx.font='bold 18px monospace';
+    ctx.fillText('+'+train.coins+' COINS for passing it the first time',W/2,368);
+  } else if(train.passed){
+    ctx.fillStyle='#6a7a6a'; ctx.font='13px monospace';
+    ctx.fillText('Already passed — this one is for the leaderboard now',W/2,368);
+  } else {
+    ctx.fillStyle='#8a8256'; ctx.font='13px monospace';
+    ctx.fillText(d.blurb,W/2,368);
+  }
+
+  if(Math.sin(frameN*.07)>0){
+    ctx.fillStyle='#ffffff'; ctx.font='bold 16px monospace';
+    ctx.fillText(isTouchDevice?'TAP TO GO BACK':'PRESS ENTER TO GO BACK',W/2,H-40);
+  }
+  ctx.textAlign='left';
 }
 
 function nextLevel(){
@@ -2054,6 +2420,7 @@ function updatePhil(dt){
         if(fromRight===facingRight){
           p.dead=true; burst(p.x,p.y,'#88ccff',6,70,0); SFX.block();
           if(tut) tut.blocks++;
+          if(train&&train.id==='shield') train.score++;
           continue;
         }
       }
@@ -2114,6 +2481,7 @@ function updatePhil(dt){
     const flagBox={x:levelData.flagX-15,y:levelData.flagY-80,w:30,h:90};
     if(overlap(phil,flagBox)){
       if(tut) tutorialFlagTouch();
+      else if(train) trainFlagTouch();
       else if(secretRun) secretComplete();
       else levelComplete();
     }
@@ -2124,6 +2492,9 @@ function philTakeDmg(amt, opts={}){
   const { ignoreInv=false, setInv=true, respawnToSafe=false } = opts;
   if(phil.dead) return false;
   if(!ignoreInv&&phil.invTimer>0) return false;
+  // An arrow through the guard costs a point. That is the whole drill: it is
+  // cheaper to turn and block than to tank it.
+  if(train&&train.id==='shield'&&!train.done){ train.taken++; train.score--; }
   const hitX=phil.x+phil.w/2, hitY=phil.y+phil.h/2;
 
   // The star is true immunity — it also beats hazards that pass ignoreInv (saws,
@@ -2171,6 +2542,7 @@ function philDie(){
   // Nobody runs out of lives in a tutorial. The step's own respawn point puts
   // Phil back where he was, and the lesson carries on.
   if(tut){ setTimeout(()=>{ if(tut) respawnPhil(); },1200); return; }
+  if(train){ trainPhilDied(); return; }
   G.lives--;
   if(G.lives>0){
     setTimeout(()=>{ respawnPhil(); },1800);
@@ -2641,7 +3013,8 @@ function hitEnemy(e, dmg){
     if(combo>=3){ burst(e.x+e.w/2,e.y+e.h/2,combo>=5?'#ff88ff':'#ffaa00',16,150,300); SFX.coin(); }
     burst(e.x+e.w/2,e.y+e.h/2,'#ff4422',14,130,350); SFX.die();
     // No coins from the tutorial — it is replayable, and a drill shouldn't pay
-    if(!tut) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
+    if(train&&train.id==='survive') train.score++;
+    if(!tut&&!train) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
     if(e.type==='heavy'&&Math.random()<0.5) spawnHealthPickup(e);
   }
 }
@@ -4884,6 +5257,9 @@ function drawHUD(){
   if(tut){
     ctx.fillStyle='#7fd0ff';
     ctx.fillText(`HOW TO PLAY  -  STEP ${Math.min(tut.i+1,TUT_STEPS.length)} OF ${TUT_STEPS.length}`,W/2,38);
+  } else if(train){
+    ctx.fillStyle='#ffd54a';
+    ctx.fillText('★ TRAINING DRILL ★',W/2,38);
   } else if(secretRun){
     ctx.fillStyle='#ffd54a';
     ctx.fillText(`★ SECRET AREA - ${SECRET_META[secretRun.theme].name} ★`,W/2,38);
@@ -4974,6 +5350,7 @@ function drawHUD(){
   }
 
   drawTutorialPanel();
+  drawTrainingHUD();
 }
 
 // ─── FLAG DRAWING ───
@@ -6105,6 +6482,125 @@ function drawSecretPicker(){
 }
 
 // ══════════════════════════════════════════════════════
+//  PRACTICE — the tutorial and the four drills
+// ══════════════════════════════════════════════════════
+// One title row for everything you do to get better, because the title menu was
+// already at eight rows and out of vertical space. It also groups them honestly:
+// the tutorial teaches, the drills score.
+let pracSel=0, pracKeyHeld=false;
+const pracRows = ()=>1+TRAIN_ORDER.length+1;          // tutorial + drills + BACK
+function pracBox(i){ return { x:W/2-260, y:132+i*54, w:520, h:46 }; }
+
+function openPractice(fromDrill){
+  initAC();
+  pracKeyHeld=true;
+  if(!fromDrill) pracSel=0;
+  G.screen='PRACTICE';
+  if(!fromDrill) SFX.pickup();
+}
+
+function pracActivate(){
+  if(pracSel===0){ startTutorial('PRACTICE'); return; }
+  const id=TRAIN_ORDER[pracSel-1];
+  if(id){ startTraining(id); return; }
+  titleKeyHeld=true; G.screen='TITLE'; SFX.pickup();     // BACK
+}
+
+function handlePracticeInput(){
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const go=keys['Enter']||keys['Space'], back=keys['Escape'];
+  const n=pracRows();
+  if(up||down||go||back){
+    if(!pracKeyHeld){
+      pracKeyHeld=true;
+      if(back){ titleKeyHeld=true; G.screen='TITLE'; SFX.pickup(); }
+      else if(go) pracActivate();
+      else if(down){ pracSel=(pracSel+1)%n; SFX.pickup(); }
+      else if(up){ pracSel=(pracSel+n-1)%n; SFX.pickup(); }
+    }
+  } else pracKeyHeld=false;
+
+  if(tapPoint){
+    const first=pracBox(0), last=pracBox(n-1);
+    if(tapPoint.x>first.x-24&&tapPoint.x<first.x+first.w+24&&
+       tapPoint.y>first.y-14&&tapPoint.y<last.y+last.h+14){
+      let best=0, bestD=Infinity;
+      for(let i=0;i<n;i++){
+        const b=pracBox(i), d=Math.abs(tapPoint.y-(b.y+b.h/2));
+        if(d<bestD){ bestD=d; best=i; }
+      }
+      pracSel=best; tapPoint=null; pracActivate(); return;
+    }
+    tapPoint=null;
+  }
+}
+
+function drawPractice(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0c1420'); g.addColorStop(1,'#16202e');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#ffd54a'; ctx.shadowBlur=14;
+  ctx.fillStyle='#ffe89a'; ctx.font='bold 30px monospace';
+  ctx.fillText('PRACTICE',W/2,74);
+  ctx.restore();
+  const done=TRAIN_ORDER.filter(id=>trainRec.cleared.has(id)).length;
+  ctx.fillStyle='#6f7a86'; ctx.font='11px monospace';
+  ctx.fillText(`Learn the game, then drill it — ${done} of ${TRAIN_ORDER.length} drills passed`,W/2,98);
+
+  for(let i=0;i<pracRows();i++){
+    const b=pracBox(i), sel=(i===pracSel);
+    const isTut=(i===0), isBack=(i===pracRows()-1);
+    const id=(!isTut&&!isBack)?TRAIN_ORDER[i-1]:null;
+    const d=id?TRAINING[id]:null;
+    const cleared=id?trainRec.cleared.has(id):false;
+
+    ctx.fillStyle=sel?'rgba(120,90,20,0.5)':'rgba(0,0,0,0.32)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle=sel?'#ffd54a':(cleared?'#5a7a55':'#33404e'); ctx.lineWidth=2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+
+    if(isBack){
+      ctx.fillStyle=sel?'#ffffff':'#9a9276'; ctx.font='bold 15px monospace';
+      ctx.fillText('BACK TO THE TITLE',W/2,b.y+29);
+    } else if(isTut){
+      ctx.textAlign='left';
+      ctx.fillStyle=sel?'#ffffff':'#c8bf94'; ctx.font='bold 15px monospace';
+      ctx.fillText('HOW TO PLAY',b.x+16,b.y+20);
+      ctx.fillStyle=sel?'#ffe89a':'#7f8a96'; ctx.font='11px monospace';
+      ctx.fillText('The tutorial — every control, one at a time',b.x+16,b.y+36);
+      ctx.textAlign='right';
+      ctx.fillStyle=tutorialDone?'#7fd06a':'#6a6450'; ctx.font='bold 11px monospace';
+      ctx.fillText(tutorialDone?'DONE':'NOT DONE YET',b.x+b.w-16,b.y+28);
+      ctx.textAlign='center';
+    } else {
+      ctx.textAlign='left';
+      ctx.fillStyle=sel?'#ffffff':'#c8bf94'; ctx.font='bold 15px monospace';
+      ctx.fillText(d.name,b.x+16,b.y+20);
+      ctx.fillStyle=sel?'#ffe89a':'#7f8a96'; ctx.font='11px monospace';
+      ctx.fillText(d.blurb,b.x+16,b.y+36);
+      ctx.textAlign='right';
+      const best=trainRec.best[id];
+      ctx.fillStyle=cleared?'#7fd06a':'#6a6450'; ctx.font='bold 11px monospace';
+      ctx.fillText(cleared?'PASSED':'TO PASS '+fmtTrain(id,d.target),b.x+b.w-16,b.y+20);
+      ctx.fillStyle=best!=null?'#c8cf9a':'#4e5866'; ctx.font='11px monospace';
+      ctx.fillText('BEST '+fmtTrain(id,best),b.x+b.w-16,b.y+36);
+      ctx.textAlign='center';
+    }
+    if(sel&&Math.sin(frameN*.12)>0){
+      ctx.fillStyle='#ffd54a'; ctx.font='bold 15px monospace';
+      ctx.fillText('>',b.x-14,b.y+30); ctx.fillText('<',b.x+b.w+14,b.y+30);
+    }
+  }
+
+  ctx.fillStyle='#445544'; ctx.font='11px monospace';
+  ctx.fillText(isTouchDevice?'Tap a row'
+    :'Arrows/WASD: Select   Enter: Start   Esc: Back',W/2,H-22);
+  ctx.textAlign='left';
+}
+
+// ══════════════════════════════════════════════════════
 //  WEAPON SHOP
 // ══════════════════════════════════════════════════════
 // Reachable from the title and from the pause menu, and it remembers which, so
@@ -6544,7 +7040,7 @@ function titleItems(){
   items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
   items.push({ id:'rush', label:()=>'BOSS RUSH' });
-  items.push({ id:'tutorial', label:()=>'HOW TO PLAY' });
+  items.push({ id:'practice', label:()=>'PRACTICE' });
   items.push({ id:'shop', label:()=>'WEAPON SHOP  ('+shop.coins+' coins)' });
   items.push({ id:'skin', label:()=>'SKIN: '+skinDef().name });
   items.push({ id:'music', label:()=>'MUSIC: '+(musicOn?'ON':'OFF') });
@@ -6593,8 +7089,8 @@ function titleActivate(){
     openMap();
   } else if(id==='rush'){
     startRushRun();
-  } else if(id==='tutorial'){
-    startTutorial('TITLE');
+  } else if(id==='practice'){
+    openPractice();
   } else if(id==='shop'){
     openShop('TITLE');
   } else if(id==='music'){
@@ -6820,7 +7316,12 @@ function drawWin(){
 // Built fresh so the music row shows its current state
 // Keyed by id rather than position: the actions used to be a chain of index
 // comparisons, so inserting a row silently rewired every one below it.
-const pauseItems = ()=> tut ? [
+const pauseItems = ()=> train ? [
+  { id:'resume',    label:'RESUME' },
+  { id:'trainretry',label:'START THE DRILL OVER' },
+  { id:'music',     label:'MUSIC: '+(musicOn?'ON':'OFF') },
+  { id:'trainquit', label:'GIVE UP AND GO BACK' },
+] : tut ? [
   // The campaign items would all misfire here — RESTART LEVEL builds a generated
   // level, and the map and shop have nothing to do with a drill
   { id:'resume',   label:'RESUME' },
@@ -6867,6 +7368,8 @@ function drawPauseMenu(){
 function pauseActivate(){
   const id=pauseItems()[pauseSelect].id;
   if(id==='resume'){ paused=false; }
+  else if(id==='trainretry'){ paused=false; startTraining(train.id); }
+  else if(id==='trainquit'){ paused=false; exitTraining(); }
   else if(id==='tutstart'){ paused=false; startTutorial(tutReturn); }
   else if(id==='tutskip'){ skipTutorial(); }
   else if(id==='restart'){ paused=false; G.lives=3; startLevel(); }
@@ -7872,6 +8375,14 @@ function loop(ts){
   // --- TITLE ---
   if(G.screen==='TITLE'){ drawTitle(); handleTitleInput(); return; }
   if(G.screen==='MAP'){ updateMap(dt); drawMap(); handleMapInput(); return; }
+  if(G.screen==='PRACTICE'){ drawPractice(); handlePracticeInput(); return; }
+  if(G.screen==='TRAIN_DONE'){
+    drawBackground(); drawPlatforms(); drawDecorations(); drawTrainDone();
+    if(train.passed&&Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#ffe14d',10,140,0);
+    updateParts(dt); drawParts();
+    if(In.restart()){ exitTraining(); }
+    return;
+  }
   // Drawn over the frozen level it was opened from, so you can see where you are
   if(G.screen==='SECRET_PICK'){
     drawBackground(); drawPlatforms(); drawDecorations(); drawHUD();
@@ -7987,6 +8498,7 @@ function loop(ts){
       updatePickups(dt);
       updateHazards(dt);
       updateTutorial(dt);    // after the world moves: steps read the settled state
+      updateTraining(dt);
       updateCam(dt);
       updateParts(dt);
     }
@@ -8009,6 +8521,7 @@ function loop(ts){
     drawFlag(levelData.flagX,levelData.flagY-80,'#dd1111',true);
   drawSecretDoor();
   drawSecretKey();
+  if(train) trainDef().draw();
 
   // Shockwaves (drawn before entities)
   if(boss&&boss.shockwaves){

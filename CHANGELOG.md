@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- Training drills — four timed arenas, each about one skill, on a new **PRACTICE** screen that also
+  hosts the tutorial. **Sword Timing**: one target lights at a time, hit it and the next lights.
+  **Shield Drill**: two archers, and your score is blocks minus arrows that got through — standing
+  still facing one way scores exactly zero. **Parkour Run**: a floating course with no floor, timed,
+  and falling costs you the climb back with the clock running. **Survival**: waves that tighten from
+  every 2.4s to every 1.0s and harden from soldiers to archers, bombers and heavies. Each drill
+  keeps your best score and pays 50 coins the first time you pass it — once ever, so a drill can't
+  be farmed. Campaign progress, score, lives and the save are parked while a drill runs, and no
+  coins drop from drill kills ([#11](https://github.com/natethedrummer/stickman-escape/issues/11))
+
+### Changed
+- The title screen's HOW TO PLAY row became **PRACTICE**, which opens the tutorial and the four
+  drills together. The menu was already at eight rows and out of vertical space, and it groups them
+  honestly: the tutorial teaches, the drills score
+
+### Added
 - Dialogue — characters now speak over the live level in a box along the bottom, with a portrait of
   whoever is talking, their name, and the line typed out a character at a time. Press or tap to go
   on, **Esc** to skip. It fills the moments the comic cutscenes never covered: **Phil reacting to

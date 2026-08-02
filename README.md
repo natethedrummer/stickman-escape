@@ -53,8 +53,17 @@ Mobile touch controls appear automatically on touch devices: move, jump, attack,
 
 > **Shield tip:** The shield only blocks arrows coming from the front — face the archer before raising it.
 
-New to the game? Pick **HOW TO PLAY** on the title screen. It runs automatically the first time you
-start a new game, and can be skipped from the pause menu.
+New to the game? Pick **PRACTICE** on the title screen — it holds the **How to Play** tutorial,
+which also runs automatically the first time you start a new game, plus four timed drills:
+
+| Drill | Goal | To pass |
+|-------|------|---------|
+| Sword Timing | Hit the lit target; the next one lights | 10 hits in 30s |
+| Shield Drill | Blocks minus arrows that get through | +6 in 30s |
+| Parkour Run | Reach the flag; falling costs the climb back | Under 22s |
+| Survival | Waves for 30 seconds | 8 beaten |
+
+Passing a drill for the first time pays 50 coins. After that it keeps your best score.
 
 ---
 
