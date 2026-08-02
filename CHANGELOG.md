@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+- Dialogue — characters now speak over the live level in a box along the bottom, with a portrait of
+  whoever is talking, their name, and the line typed out a character at a time. Press or tap to go
+  on, **Esc** to skip. It fills the moments the comic cutscenes never covered: **Phil reacting to
+  each new world** as he arrives in it, and **Phil's line after every boss goes down**. The five
+  level-5 mini bosses — the only bosses with no story of their own — now taunt him as the fight
+  opens, and he answers back. The level stays on screen behind the box, which is the whole point:
+  the comic panels are for the big story beats, dialogue is for a character saying one thing
+  without leaving the place you are standing in. Portraits are drawn for Phil and each speaking
+  boss, with a tinted fallback so a new speaker never renders blank. Lines play once per run and
+  come back on a new game, and never interrupt Boss Rush or the tutorial
+  ([#25](https://github.com/natethedrummer/stickman-escape/issues/25))
+
+### Fixed
+- Quitting to the title while a defeated boss was still exploding fired the level-clear screen three
+  seconds later anyway, dropping you into a cleared level you had already left
+
 ### Fixed
 - Phone and iPad players can pause. There was no pause button on the touch pad and the pause menu
   had no tap handling at all, so `Escape`/`P` was the only way in — meaning on a touch device the
