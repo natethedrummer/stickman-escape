@@ -488,7 +488,9 @@ if(isTouchDevice){ document.getElementById('touch').style.display='block';
 let touchPadShown=true;
 function syncTouchPad(){
   if(!isTouchDevice) return;
-  const want = G.screen==='PLAYING';
+  // Hidden while someone is speaking too: the dialogue box sits along the bottom
+  // where the pad lives, and with the pad gone a tap anywhere advances the line
+  const want = G.screen==='PLAYING' && !dlg;
   if(want===touchPadShown) return;
   touchPadShown=want;
   document.getElementById('touch').style.display = want?'block':'none';
@@ -1565,6 +1567,7 @@ function startLevel(){
   pickups   = spawnPowerups(levelData.powerups);
   hazards   = spawnHazards(levelData.hazards);
   boss      = null;
+  dlg       = null;              // a stale line would freeze the new level
   checkActivated = false;
   checkpointRespawn = null;
   parts     = [];
@@ -1582,6 +1585,7 @@ function startLevel(){
     else toBossIntro();
   } else {
     G.screen = 'PLAYING';
+    playWorldArrival();      // draws over the level, so it needs PLAYING first
   }
 }
 
@@ -1603,6 +1607,7 @@ function startSecretLevel(world=G.world, opts={}){
   pickups   = [];
   hazards   = [];
   boss      = null;
+  dlg       = null;              // a stale line would freeze the new level
   checkActivated = false;
   checkpointRespawn = null;
   parts     = [];
@@ -1660,7 +1665,7 @@ function startTutorial(from='TITLE'){
   hasRay=false; rayCD=0; rayFx=null;
   levelData = genTutorialLevel();
   enemies   = spawnEnemies(levelData.enemies);
-  projs=[]; pickups=[]; hazards=[]; boss=null; parts=[];
+  projs=[]; pickups=[]; hazards=[]; boss=null; parts=[]; dlg=null;
   checkActivated=false; checkpointRespawn=null;
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
   initPhil(levelData.playerStart.x, levelData.playerStart.y);
@@ -3015,7 +3020,9 @@ function bossKilled(){
       playCutscene('ending',()=>{ G.screen='WIN'; });
     },3200);
   } else {
-    setTimeout(()=>{ levelComplete(); },3200);
+    // Phil gets the last word before the clear screen takes over
+    const type=boss.type;
+    setTimeout(()=>{ playBossVictory(type, levelComplete); },3200);
   }
 }
 
@@ -6891,6 +6898,246 @@ function handlePauseTap(){
 }
 
 // ══════════════════════════════════════════════════════
+//  DIALOGUE — characters speaking over the live level
+// ══════════════════════════════════════════════════════
+// Deliberately not a cutscene. The comic panels already own the big story beats
+// (the intro, each world boss, the ending) and they take the whole screen to do
+// it. Dialogue is the opposite: the level stays where it is behind the box, so a
+// character can say one thing without the game leaving the place you are in.
+//
+// It fills the two moments the panels never covered — arriving somewhere new,
+// and winning — plus the level-5 mini bosses, which had no story at all.
+const DLG_WORLD = {
+  2:[['phil','Sand. Sand and more sand.'],
+     ['phil','Keep walking, Phil. They are still behind you.']],
+  3:[['phil','I cannot feel my hands.'],
+     ['phil','Cold I can live with. Caught, I cannot.']],
+  4:[['phil','Factory 999. This is where they MAKE the soldiers.'],
+     ['phil','I came off a line just like that one.']],
+  5:[['phil','No sky down here. No sky at all.'],
+     ['phil','Whatever they are digging for, it is not coal.']],
+  6:[['phil','Berlin. The last checkpoint before the border.'],
+     ['phil','One more city. One more city and I am free.']],
+};
+
+// Only the level-5 mini bosses: the world bosses get a full comic scene before
+// their arena, and stacking a taunt on top of that is one beat too many.
+const DLG_TAUNT = {
+  giant:       [['giant','DESERTER! Get back in line!'],
+                ['phil','I am done standing in lines.']],
+  frostwarden: [['frostwarden','The glacier keeps everything it catches.'],
+                ['phil','Then it has to catch me first.']],
+  foreman:     [['foreman','Unit 47. Return to the assembly line.'],
+                ['phil','That has not been my name for a long time.']],
+  tunnelfiend: [['phil','...something is down here with me.'],
+                ['tunnelfiend','YOU are.']],
+  captain:     [['captain','HALT! By order of the Stickman Army!'],
+                ['phil','You will have to make me.']],
+};
+
+const DLG_WIN = {
+  giant:       'That is one commander who will not be missed.',
+  anaconda:    'The forest can keep its guardian. I am going.',
+  lizard:      'Even the machines out here are trying to eat me.',
+  frostwarden: 'Told you. The glacier keeps nothing today.',
+  yeti:        'Big. Loud. Slow. Two out of three is not enough.',
+  foreman:     'The line is shut down, Foreman. Permanently.',
+  revenant:    'Whatever they built you from — rest now.',
+  tunnelfiend: 'Nothing down here is going to stop me either.',
+  mole:        'Dig all you like. I am going up.',
+  captain:     'I made you. Sorry about the shield.',
+  agent:       'Berlin is behind me. So are you.',
+  _:           'One less thing between me and the border.',
+};
+
+const DLG_CPS = 44;                 // characters revealed per second
+const DLG_BOX = { x:44, y:H-152, w:W-88, h:128 };
+let dlg = null;                     // { lines, i, chars, after } while running
+let dlgHeld = false;                // edge-trigger guard for the advance key
+
+function dlgLine(){ return dlg ? dlg.lines[dlg.i] : null; }
+// Always PHIL, whatever skin is equipped — a skin is a costume, and naming the
+// speaker MINION mid-escape reads as a different character rather than a hat.
+function dlgSpeaker(id){
+  return id==='phil' ? 'PHIL' : (getBossMeta(id).name||'???').toUpperCase();
+}
+
+// `after` runs whether the dialogue was read or skipped, so nothing downstream
+// has to care which happened.
+function startDialogue(lines, after){
+  if(!lines||!lines.length){ after&&after(); return; }
+  dlg={ lines, i:0, chars:0, after:after||null };
+  dlgHeld=true; tapPoint=null;
+}
+
+function endDialogue(){
+  const after=dlg.after;
+  dlg=null; tapPoint=null; dlgHeld=true;
+  keys['Enter']=false; keys['Space']=false; keys['KeyZ']=false; touches.start=false;
+  if(after) after();
+}
+
+function dlgAdvance(){
+  const full=dlgLine()[1].length;
+  if(dlg.chars<full){ dlg.chars=full; return; }     // first press finishes the line
+  dlg.i++;
+  if(dlg.i>=dlg.lines.length){ endDialogue(); return; }
+  dlg.chars=0; SFX.pickup();
+}
+
+function updateDialogue(dt){
+  const full=dlgLine()[1].length;
+  if(dlg.chars<full) dlg.chars=Math.min(full,dlg.chars+dt*DLG_CPS);
+
+  const skip=keys['Escape'];
+  const adv=keys['Space']||keys['Enter']||keys['KeyZ']||keys['ArrowRight'];
+  const tapAdv=!!tapPoint;
+  tapPoint=null;
+
+  if(skip){ keys['Escape']=false; endDialogue(); return; }
+  if(tapAdv) dlgAdvance();                          // taps are already one-shot
+  else if(adv&&!dlgHeld){ dlgHeld=true; dlgAdvance(); }
+  if(!dlg) return;
+  if(!adv) dlgHeld=false;
+}
+
+// Head and shoulders in a 64px frame. Small enough that each character needs one
+// silhouette cue rather than a likeness — a helmet, a visor, a pair of horns.
+function drawPortrait(id, cx, cy, s){
+  const col = id==='phil' ? skinDef().color
+            : ({giant:'#3a5a10', frostwarden:'#8fd8ee', foreman:'#9aa7b2',
+                tunnelfiend:'#6b4a7a', captain:'#4a5a6a'})[id] || '#7a6a5a';
+  ctx.save();
+  ctx.translate(cx,cy); ctx.scale(s,s);
+  ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=2.4; ctx.lineCap='round';
+
+  // Shoulders, clipped by the frame so it reads as a bust
+  ctx.beginPath(); ctx.arc(0,26,17,Math.PI,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0,-4,11,0,Math.PI*2); ctx.stroke();
+
+  // Headgear first, face second. Drawn the other way round the Giant's helmet
+  // and the Captain's visor simply covered the eyes and left a blank head.
+  let eyes='x';                                       // 'x' angry, 'dot' Phil, null none
+  if(id==='giant'){                                   // army helmet, sat high
+    ctx.fillStyle='#25400b';
+    ctx.beginPath(); ctx.arc(0,-8,12.5,Math.PI,Math.PI*2); ctx.fill();
+    ctx.fillRect(-15,-9,30,3);
+  } else if(id==='frostwarden'){                      // ice crown
+    ctx.fillStyle='#dff4ff';
+    [[-9,-10],[0,-14],[9,-10]].forEach(p=>{
+      ctx.beginPath(); ctx.moveTo(p[0]-3.5,p[1]); ctx.lineTo(p[0],p[1]-9); ctx.lineTo(p[0]+3.5,p[1]);
+      ctx.closePath(); ctx.fill();
+    });
+  } else if(id==='foreman'){                          // welder's visor IS the face
+    ctx.fillStyle='#2f3944'; ctx.fillRect(-12,-9,24,7);
+    ctx.fillStyle='#ffb648'; ctx.fillRect(-9,-7.5,18,2.4);
+    eyes=null;
+  } else if(id==='tunnelfiend'){                      // two coals in the dark
+    ctx.fillStyle='#ff8a4a';
+    ctx.beginPath(); ctx.arc(-4.5,-5.5,2.6,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4.5,-5.5,2.6,0,Math.PI*2); ctx.fill();
+    eyes=null;
+  } else if(id==='captain'){                          // riot helmet, eyes behind glass
+    ctx.fillStyle='#39434f';
+    ctx.beginPath(); ctx.arc(0,-9,13,Math.PI,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(180,220,255,0.45)'; ctx.fillRect(-12,-9,24,9);
+  } else if(id==='phil'){
+    eyes='dot';
+  }
+
+  if(eyes==='dot'){
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(4,-4,3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(5,-4,1.5,0,Math.PI*2); ctx.fill();
+  } else if(eyes==='x'){
+    ctx.strokeStyle=id==='captain'?'#0f1720':col;
+    ctx.lineWidth=2;
+    [-4.5,3.5].forEach(ox=>{
+      ctx.beginPath(); ctx.moveTo(ox-2.5,-7); ctx.lineTo(ox+2.5,-2);
+      ctx.moveTo(ox+2.5,-7); ctx.lineTo(ox-2.5,-2); ctx.stroke();
+    });
+  }
+  ctx.restore();
+}
+
+function drawDialogue(){
+  if(!dlg) return;
+  const [who,text]=dlgLine();
+  const b=DLG_BOX;
+
+  ctx.save();
+  ctx.fillStyle='rgba(6,10,18,0.92)'; ctx.fillRect(b.x,b.y,b.w,b.h);
+  ctx.strokeStyle='#8fb8e0'; ctx.lineWidth=2; ctx.strokeRect(b.x+1,b.y+1,b.w-2,b.h-2);
+
+  // Portrait frame on the left, clipped so the bust sits inside it
+  const pf={ x:b.x+14, y:b.y+16, w:84, h:84 };
+  ctx.fillStyle='rgba(140,190,235,0.10)'; ctx.fillRect(pf.x,pf.y,pf.w,pf.h);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(pf.x,pf.y,pf.w,pf.h); ctx.clip();
+  drawPortrait(who, pf.x+pf.w/2, pf.y+pf.h/2-4, 1.9);
+  ctx.restore();
+  ctx.strokeStyle='rgba(143,184,224,0.55)'; ctx.lineWidth=1.5;
+  ctx.strokeRect(pf.x+.5,pf.y+.5,pf.w-1,pf.h-1);
+
+  const tx=pf.x+pf.w+18, tw=b.x+b.w-tx-18;
+  ctx.textAlign='left';
+  ctx.fillStyle='#8fb8e0'; ctx.font='bold 13px monospace';
+  ctx.fillText(dlgSpeaker(who),tx,b.y+30);
+
+  // Typed out a character at a time, wrapped to the space beside the portrait
+  ctx.fillStyle='#eef4fb'; ctx.font='15px monospace';
+  const shown=text.slice(0,Math.floor(dlg.chars));
+  wrapLine(shown,tw,'15px monospace').forEach((l,i)=>ctx.fillText(l,tx,b.y+56+i*21));
+
+  ctx.fillStyle='#5b6f85'; ctx.font='10px monospace';
+  ctx.fillText(`${dlg.i+1}/${dlg.lines.length}`,tx,b.y+b.h-12);
+  ctx.textAlign='right';
+  const done=dlg.chars>=text.length;
+  if(done&&Math.sin(frameN*.12)>0){
+    ctx.fillStyle='#eef4fb'; ctx.font='bold 13px monospace';
+    ctx.fillText(isTouchDevice?'TAP ▸':'▸',b.x+b.w-18,b.y+b.h-12);
+  }
+  ctx.fillStyle='#4a5a6b'; ctx.font='10px monospace';
+  ctx.fillText(isTouchDevice?'tap to go on':'space / enter  ·  esc skips',b.x+b.w-18,b.y+18);
+  ctx.textAlign='left';
+  ctx.restore();
+}
+
+// ── WHERE DIALOGUE FIRES ──
+// Never in Boss Rush (back-to-back fights by design) or the tutorial (it has its
+// own voice already). `G.seenCuts` is the existing per-run record and rides along
+// in the save, so a line plays once a run and returns on a new game.
+function dlgAllowed(){ return G.mode==='CAMPAIGN' && !tut; }
+
+function playWorldArrival(){
+  if(!dlgAllowed()||G.level!==1) return false;
+  const lines=DLG_WORLD[G.world];
+  const key='dlgW'+G.world;
+  if(!lines||G.seenCuts[key]) return false;
+  G.seenCuts[key]=true;
+  startDialogue(lines);
+  return true;
+}
+
+function playBossTaunt(type){
+  if(!dlgAllowed()) return false;
+  const lines=DLG_TAUNT[type];
+  const key='dlgT'+type;
+  if(!lines||G.seenCuts[key]) return false;
+  G.seenCuts[key]=true;
+  startDialogue(lines);
+  return true;
+}
+
+function playBossVictory(type, after){
+  // This fires on a timer after the death animation. Quitting to the title in
+  // that window used to still throw up the level-clear screen three seconds
+  // later — if we have left the level, neither the line nor the clear happens.
+  if(G.screen!=='PLAYING') return;
+  if(!dlgAllowed()){ after(); return; }
+  startDialogue([['phil', DLG_WIN[type]||DLG_WIN._]], after);
+}
+
+// ══════════════════════════════════════════════════════
 //  CUTSCENES — canvas-drawn comic panels
 // ══════════════════════════════════════════════════════
 const CUT_R = { x:96, y:64, w:768, h:376 };
@@ -7677,7 +7924,9 @@ function loop(ts){
     drawBoss();
     bossIntroTimer-=dt;
     if(G.screen==='BOSS_INTRO') drawBossIntro(); else drawFinalBossIntro();
-    if(bossIntroTimer<=0){ G.screen='PLAYING'; }
+    // The taunt lands as the fight opens, with the boss already on screen —
+    // the mini bosses are the ones with no comic scene of their own
+    if(bossIntroTimer<=0){ G.screen='PLAYING'; if(boss) playBossTaunt(boss.type); }
     return;
   }
 
@@ -7691,10 +7940,16 @@ function loop(ts){
 
   // --- PLAYING ---
   if(G.screen==='PLAYING'){
-    // Pause toggle (edge-triggered)
-    if(In.pause()){ if(!pauseKeyHeld){ paused=!paused; pauseSelect=0; pauseKeyHeld=true; } } else { pauseKeyHeld=false; }
+    // Pause toggle (edge-triggered). Held off while someone is speaking: the
+    // dialogue owns Escape as its skip, and the two would fight over it.
+    if(!dlg){
+      if(In.pause()){ if(!pauseKeyHeld){ paused=!paused; pauseSelect=0; pauseKeyHeld=true; } } else { pauseKeyHeld=false; }
+    }
 
-    if(paused){
+    if(dlg){
+      updateDialogue(dt);
+      updateParts(dt);          // let the boss's death sparks keep burning behind it
+    } else if(paused){
       // Navigate pause menu
       if(keys['ArrowDown']||keys['KeyS']){ pauseSelect=(pauseSelect+1)%pauseItems().length; keys['ArrowDown']=false; keys['KeyS']=false; }
       if(keys['ArrowUp']  ||keys['KeyW']){ pauseSelect=(pauseSelect+pauseItems().length-1)%pauseItems().length; keys['ArrowUp']=false; keys['KeyW']=false; }
@@ -7812,6 +8067,7 @@ function loop(ts){
 
   drawDarkness();
   drawHUD();
+  drawDialogue();
   if(paused) drawPauseMenu();
 }
 
