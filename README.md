@@ -48,7 +48,8 @@ Or download and open `index.html` in any modern browser (Chrome, Firefox, Safari
 | Cutscene — next panel | `Space`, `Enter`, `Z`, `→`, or click |
 | Cutscene — skip | `Escape` or the SKIP button |
 
-Mobile touch controls appear automatically on touch devices.
+Mobile touch controls appear automatically on touch devices: move, jump, attack, shield, and a
+**❚❚** pause button above the movement pad. Every row of the pause menu can be tapped.
 
 > **Shield tip:** The shield only blocks arrows coming from the front — face the archer before raising it.
 

@@ -16,6 +16,10 @@ canvas { display:block; image-rendering:pixelated; image-rendering:crisp-edges; 
 #touch { position:fixed; bottom:0; left:0; right:0; height:160px; display:none; pointer-events:none; }
 .tb { position:absolute; pointer-events:all; border-radius:50%; border:2px solid rgba(255,255,255,0.35); background:rgba(255,255,255,0.1); color:rgba(255,255,255,0.85); font-size:20px; width:62px; height:62px; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none; -webkit-tap-highlight-color:transparent; }
 #tL{bottom:20px;left:15px} #tR{bottom:20px;left:90px} #tJ{bottom:20px;right:15px;background:rgba(80,150,255,0.2);border-color:rgba(80,150,255,0.5)} #tA{bottom:20px;right:90px;background:rgba(255,100,50,0.2);border-color:rgba(255,100,50,0.5)} #tS{bottom:20px;right:165px;background:rgba(80,220,80,0.2);border-color:rgba(80,220,80,0.5)}
+/* Pause sits above the move cluster, smaller and dimmer than the action buttons
+   so it is never hit by accident mid-jump. It clears the pause menu's own rows,
+   which are centred, so it stays tappable while the menu is open. */
+#tP{bottom:96px;left:15px;width:44px;height:44px;font-size:15px;background:rgba(160,120,220,0.18);border-color:rgba(180,150,235,0.45)}
 </style>
 </head>
 <body>
@@ -23,6 +27,7 @@ canvas { display:block; image-rendering:pixelated; image-rendering:crisp-edges; 
 <div id="touch">
   <div class="tb" id="tL">◀</div><div class="tb" id="tR">▶</div>
   <div class="tb" id="tJ">▲</div><div class="tb" id="tA">⚔</div><div class="tb" id="tS">🛡</div>
+  <div class="tb" id="tP">❚❚</div>
 </div>
 <script>
 // ══════════════════════════════════════════════════════
@@ -415,7 +420,7 @@ function toggleMusic(){ initAC(); setMusicOn(!musicOn); SFX.pickup(); }
 // ══════════════════════════════════════════════════════
 //  INPUT
 // ══════════════════════════════════════════════════════
-const keys={}, touches={L:false,R:false,J:false,A:false,S:false,start:false};
+const keys={}, touches={L:false,R:false,J:false,A:false,S:false,P:false,start:false};
 // iPadOS Safari defaults to desktop-class browsing and does not put `ontouchstart`
 // on window, so an iPad reported itself as a desktop and got no on-screen controls
 // at all — unplayable without a keyboard. A coarse primary pointer catches it.
@@ -470,7 +475,10 @@ function bindT(id,p,onPress){ const el=document.getElementById(id);
 if(isTouchDevice){ document.getElementById('touch').style.display='block';
   bindT('tL','L');bindT('tR','R',()=>handleWorldCheatTouch('r'));bindT('tJ','J',()=>handleWorldCheatTouch('j'));
   // The sword button had no cheat callback at all, so no code could use it
-  bindT('tA','A',()=>handleWorldCheatTouch('a'));bindT('tS','S',()=>handleWorldCheatTouch('s')); }
+  bindT('tA','A',()=>handleWorldCheatTouch('a'));bindT('tS','S',()=>handleWorldCheatTouch('s'));
+  // No cheat callback: pause is not part of any code, and feeding it into the
+  // buffers would let a pause mid-sequence trigger one
+  bindT('tP','P'); }
 
 // The move/jump/attack pad is a fixed overlay pinned to the bottom of the window.
 // In landscape — which is how anyone plays a 16:9 platformer on a phone — that
@@ -484,7 +492,7 @@ function syncTouchPad(){
   if(want===touchPadShown) return;
   touchPadShown=want;
   document.getElementById('touch').style.display = want?'block':'none';
-  if(!want){ touches.L=touches.R=touches.J=touches.A=touches.S=false; }
+  if(!want){ touches.L=touches.R=touches.J=touches.A=touches.S=touches.P=false; }
 }
 const In={
   left:  ()=>keys['ArrowLeft'] ||keys['KeyA']||touches.L,
@@ -494,7 +502,7 @@ const In={
   shield:()=>keys['KeyX']||keys['KeyK']||keys['ShiftLeft']||keys['ShiftRight']||touches.S,
   start: ()=>keys['Enter']||keys['Space']||touches.start,
   restart:()=>keys['KeyR']||keys['Enter']||touches.start,
-  pause:  ()=>keys['Escape']||keys['KeyP'],
+  pause:  ()=>keys['Escape']||keys['KeyP']||touches.P,
 };
 
 // ══════════════════════════════════════════════════════
@@ -4750,7 +4758,7 @@ function wrapLine(text,maxW,font){
 }
 
 function drawTutorialPanel(){
-  if(!tut) return;
+  if(!tut||paused) return;      // the pause menu owns the screen; PAUSED sits here
   const s=tutStep();
   if(!s) return;
   const caps = isTouchDevice ? s.touch : s.keys;
@@ -6820,21 +6828,66 @@ const pauseItems = ()=> tut ? [
   { id:'map',     label:'WORLD MAP' },
   { id:'quit',    label:'QUIT TO TITLE' },
 ];
+// Six rows at the old 52px pitch ran off the bottom of the canvas. Shared by the
+// draw and the tap test so a row can never be drawn somewhere it can't be hit.
+// The rows are centred (x 330-630), which is why the touch pad's buttons — all
+// hard against the left and right edges — never cover one.
+const PAUSE_GAP=44, PAUSE_TOP=H/2-88;
+function pauseBox(i){ return { x:W/2-150, y:PAUSE_TOP+i*PAUSE_GAP-22, w:300, h:34 }; }
+
 function drawPauseMenu(){
   ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center';
   ctx.fillStyle='#ccaaff'; ctx.font='bold 36px monospace'; ctx.shadowColor='#8844cc'; ctx.shadowBlur=14;
   ctx.fillText('PAUSED',W/2,H/2-150); ctx.shadowBlur=0;
-  // Six rows at the old 52px pitch run off the bottom of the canvas
-  const gap=44, top=H/2-88;
-  pauseItems().forEach((item,i)=>{
-    const sel=i===pauseSelect;
+  const items=pauseItems();
+  items.forEach((item,i)=>{
+    const b=pauseBox(i), sel=i===pauseSelect;
     ctx.fillStyle=sel?'#ffffff':'#887799';
     ctx.font=(sel?'bold ':'')+'19px monospace';
-    if(sel){ ctx.fillStyle='rgba(100,60,160,0.5)'; ctx.fillRect(W/2-150,top+i*gap-22,300,34); ctx.fillStyle='#ffffff'; }
-    ctx.fillText((sel?'▶ ':'')+item.label,W/2,top+i*gap);
+    if(sel){ ctx.fillStyle='rgba(100,60,160,0.5)'; ctx.fillRect(b.x,b.y,b.w,b.h); ctx.fillStyle='#ffffff'; }
+    ctx.fillText((sel?'▶ ':'')+item.label,W/2,PAUSE_TOP+i*PAUSE_GAP);
   });
+  ctx.fillStyle='#6a5f7a'; ctx.font='11px monospace';
+  ctx.fillText(isTouchDevice?'Tap a row  •  ❚❚ to close'
+                            :'Arrows/WASD: Select   Enter: Choose   Esc: Close',
+    W/2,pauseBox(items.length-1).y+56);
   ctx.textAlign='left';
+}
+
+// One place decides what a pause row does, so the keyboard and a tap can never
+// drift apart.
+function pauseActivate(){
+  const id=pauseItems()[pauseSelect].id;
+  if(id==='resume'){ paused=false; }
+  else if(id==='tutstart'){ paused=false; startTutorial(tutReturn); }
+  else if(id==='tutskip'){ skipTutorial(); }
+  else if(id==='restart'){ paused=false; G.lives=3; startLevel(); }
+  else if(id==='shop'){ paused=false; openShop('PLAYING'); }
+  else if(id==='music'){ toggleMusic(); }             // stay paused
+  else if(id==='map'){ paused=false; openMap(); }
+  else if(id==='quit'){ paused=false; G.screen='TITLE'; }
+}
+
+function handlePauseTap(){
+  if(!tapPoint) return;
+  const items=pauseItems();
+  const first=pauseBox(0), last=pauseBox(items.length-1);
+  // Nearest row rather than a strict box test, same as the title menu — at phone
+  // scale a 34px row is ~24 CSS px and the rows sit 10px apart
+  if(tapPoint.x>first.x-30&&tapPoint.x<first.x+first.w+30&&
+     tapPoint.y>first.y-14&&tapPoint.y<last.y+last.h+14){
+    let best=0, bestD=Infinity;
+    for(let i=0;i<items.length;i++){
+      const b=pauseBox(i), d=Math.abs(tapPoint.y-(b.y+b.h/2));
+      if(d<bestD){ bestD=d; best=i; }
+    }
+    pauseSelect=best; tapPoint=null;
+    SFX.pickup();
+    pauseActivate();
+    return;
+  }
+  tapPoint=null;
 }
 
 // ══════════════════════════════════════════════════════
@@ -7647,16 +7700,9 @@ function loop(ts){
       if(keys['ArrowUp']  ||keys['KeyW']){ pauseSelect=(pauseSelect+pauseItems().length-1)%pauseItems().length; keys['ArrowUp']=false; keys['KeyW']=false; }
       if(keys['Enter']||keys['Space']){
         keys['Enter']=false; keys['Space']=false;
-        const id=pauseItems()[pauseSelect].id;
-        if(id==='resume'){ paused=false; }
-        else if(id==='tutstart'){ paused=false; startTutorial(tutReturn); }
-        else if(id==='tutskip'){ skipTutorial(); }
-        else if(id==='restart'){ paused=false; G.lives=3; startLevel(); }
-        else if(id==='shop'){ paused=false; openShop('PLAYING'); }
-        else if(id==='music'){ toggleMusic(); }             // stay paused
-        else if(id==='map'){ paused=false; openMap(); }
-        else if(id==='quit'){ paused=false; G.screen='TITLE'; }
+        pauseActivate();
       }
+      handlePauseTap();     // the only way to work this menu on a phone or iPad
     } else {
       // Weapon swap — C or Q cycles, the number keys pick directly, and tapping
       // the HUD box is the touch route (the pad has no room for a sixth button)
