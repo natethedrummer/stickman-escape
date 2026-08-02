@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- Phone and iPad players can pause. There was no pause button on the touch pad and the pause menu
+  had no tap handling at all, so `Escape`/`P` was the only way in — meaning on a touch device the
+  menu was simply unreachable, and with it the weapon shop, restart, the world map, and the
+  tutorial's skip. There is now a **❚❚** button above the movement pad (smaller and dimmer than the
+  action buttons, so it is never caught mid-jump), and every row of the menu can be tapped. The
+  rows are centred and all six pad buttons sit hard against the left and right edges, so no button
+  covers a row in any screen size or orientation. The pause menu's actions now live in one place
+  shared by the keyboard and by taps, so the two can't drift apart
+
 ### Added
 - Tutorial — an eight-step **HOW TO PLAY** stage that teaches the controls before World 1: walking,
   jumping, crossing a gap, attacking, the five hearts and what half a heart means, blocking arrows
