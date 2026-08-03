@@ -67,7 +67,7 @@ Passing a drill for the first time pays 50 coins. After that it keeps your best 
 
 ---
 
-## 🔨 Weapon Shop
+## 🔨 Shop
 
 Beaten enemies drop coins, and finishing a level, a boss or a secret pays out more. Spend them from
 the title screen or the pause menu. What you buy is kept forever — a new game never takes it away.
@@ -78,6 +78,21 @@ the title screen or the pause menu. What you buy is kept forever — a new game 
 | Hammer | 200 | 3 | Slow swing, but it smashes a Heavy Soldier's raised shield |
 | Boomerang | 350 | 1 each way | Flies ~230px through walls and hits again on the way back |
 | Bazooka | 500 | 2 in a blast | Blows up a crowd at once; 6 rockets a life, refilled on respawn |
+
+### Cloaks
+
+Six outfits, sold from the CLOAKS tab. Five are decoration; the gi is not.
+
+| Cloak | Price | What it does |
+|-------|-------|--------------|
+| No cloak | free | Just Phil |
+| Ninja | 150 | Black wrap, mask, trailing scarf |
+| Army kit | 150 | The uniform he walked away from |
+| Tuxedo | 200 | Purely for the look of the thing |
+| Glow suit | 250 | Glows in the dark — and only glows, it lights nothing up |
+| Kung Fu gi | 600 | **Replaces your weapon** with punches and kicks: short reach, fast swing, and a flying kick that hits for 2 in mid-air |
+
+A cloak layers over a Boss Rush skin, so you can wear both.
 
 ---
 
