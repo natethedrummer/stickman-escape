@@ -94,6 +94,17 @@ Six outfits, sold from the CLOAKS tab. Five are decoration; the gi is not.
 
 A cloak layers over a Boss Rush skin, so you can wear both.
 
+### Shields
+
+| Shield | Price | What it does |
+|--------|-------|--------------|
+| Wood | free | Blocks arrows and enemies at the front |
+| Tower | 250 | Blocks arrows from **any** side — but Phil walks slower while it is up |
+| Spiked | 350 | Blocks like wood, and deals 1 back to whatever runs into it |
+| Magic | 500 | Blocks like wood, plus **3 charges a life** that swallow any one hit whole |
+
+Magic charges refill every time Phil respawns, and show as pips next to the hearts.
+
 ---
 
 ## 🗺️ Game Structure
