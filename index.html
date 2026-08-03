@@ -1666,6 +1666,35 @@ const WEAPON_ORDER = ['sword','hammer','boomerang','bazooka'];
 // bazooka by the time you leave it: ~16/level from kills, +20 a level, +50 a boss.
 const COIN_KILL = 2, COIN_KILL_HEAVY = 4, COIN_LEVEL = 20, COIN_BOSS = 50, COIN_SECRET = 40;
 
+// ── CLOAKS ──
+// A second slot alongside the weapon, not a replacement for the Boss Rush skins:
+// a skin is who Phil looks like, a cloak is what he is wearing, and you can have
+// both. Five are pure decoration. The gi is not — it takes the weapon slot over
+// entirely, which is the trade you make for wearing it.
+const KUNGFU_ATTACK = { name:'KUNG FU', color:'#e8e2d0', melee:true, martial:true,
+  dmg:1, range:48, dur:0.18, cd:0.26 };
+const KUNGFU_AIR_DMG = 2;              // the flying kick
+
+const CLOAKS = {
+  none:   { name:'NO CLOAK', price:0, color:'#8a94a2',
+            blurb:'Just Phil, as he escaped.', note:'' },
+  ninja:  { name:'NINJA', price:150, color:'#2a2f3a',
+            blurb:'Black wrap, mask, trailing scarf.', note:'' },
+  army:   { name:'ARMY KIT', price:150, color:'#3a5a10',
+            blurb:'The uniform he walked away from.', note:'' },
+  tux:    { name:'TUXEDO', price:200, color:'#14161c',
+            blurb:'Nobody escapes this well dressed.', note:'' },
+  glow:   { name:'GLOW SUIT', price:250, color:'#7dffb0', glow:true,
+            blurb:'Glows in the dark. Only glows.', note:'Looks only — it lights nothing up' },
+  kungfu: { name:'KUNG FU GI', price:600, color:'#e8e2d0', martial:true,
+            blurb:'Kicks and punches instead of a weapon.',
+            note:'Fast and short-range — and a flying kick hits for 2' },
+};
+const CLOAK_ORDER = ['none','ninja','army','tux','glow','kungfu'];
+
+function cloakDef(){ return CLOAKS[shop.cloak]||CLOAKS.none; }
+function martialActive(){ return cloakDef().martial===true; }
+
 const SHOP_KEY = 'pe_shop';
 function loadShop(){
   try{
@@ -1674,17 +1703,27 @@ function loadShop(){
       const owned=new Set((s.owned||[]).filter(w=>WEAPONS[w]));
       owned.add('sword');                        // the sword is never not owned
       const eq=WEAPONS[s.equipped]&&owned.has(s.equipped)?s.equipped:'sword';
-      return { coins:Math.max(0,s.coins|0), owned, equipped:eq };
+      const cloaks=new Set((s.cloaks||[]).filter(c=>CLOAKS[c]));
+      cloaks.add('none');                        // bare Phil is always available
+      const cl=CLOAKS[s.cloak]&&cloaks.has(s.cloak)?s.cloak:'none';
+      return { coins:Math.max(0,s.coins|0), owned, equipped:eq, cloaks, cloak:cl };
     }
   }catch(e){}
-  return { coins:0, owned:new Set(['sword']), equipped:'sword' };
+  return { coins:0, owned:new Set(['sword']), equipped:'sword',
+           cloaks:new Set(['none']), cloak:'none' };
 }
 let shop = loadShop();
 function saveShop(){
   try{ localStorage.setItem(SHOP_KEY,JSON.stringify({
-    coins:shop.coins, owned:[...shop.owned], equipped:shop.equipped })); }catch(e){}
+    coins:shop.coins, owned:[...shop.owned], equipped:shop.equipped,
+    cloaks:[...shop.cloaks], cloak:shop.cloak })); }catch(e){}
 }
-function curWeapon(){ return WEAPONS[shop.equipped]||WEAPONS.sword; }
+// The gi takes the weapon slot over rather than sitting beside it. Wearing it
+// means giving up the bazooka, which is the whole point of it costing 600.
+function curWeapon(){
+  if(martialActive()) return KUNGFU_ATTACK;
+  return WEAPONS[shop.equipped]||WEAPONS.sword;
+}
 function ownedWeapons(){ return WEAPON_ORDER.filter(w=>shop.owned.has(w)); }
 
 // Banked the moment they are picked up, so closing the tab — or dying — never
@@ -1701,7 +1740,23 @@ function equipWeapon(id){
   if(!WEAPONS[id]||!shop.owned.has(id)) return;
   shop.equipped=id; saveShop();
 }
+function equipCloak(id){
+  if(!CLOAKS[id]||!shop.cloaks.has(id)) return;
+  shop.cloak=id; saveShop();
+}
+
+// Grounded punches are quick and cheap; the flying kick is the reward for
+// committing to a jump. It is the only reason to wear the gi over a bazooka.
+function attackDamage(wep){
+  if(wep.martial&&!phil.onGround) return KUNGFU_AIR_DMG;
+  return wep.dmg||1;
+}
+
 function cycleWeapon(dir){
+  if(martialActive()){
+    if(phil&&!phil.dead) scorePopup(phil.x+phil.w/2,phil.y-14,'GI: NO WEAPONS','#e8e2d0');
+    SFX.broke(); return;
+  }
   const own=ownedWeapons();
   if(own.length<2) return;
   let i=own.indexOf(shop.equipped); if(i<0) i=0;
@@ -2388,7 +2443,7 @@ function updatePhil(dt){
           }
           burst((phil.facingR?e.x:e.x+e.w),e.y+e.h*0.45,'#ffcc66',12,140,120);
         }
-        hitEnemy(e,wep.dmg||1);
+        hitEnemy(e,attackDamage(wep));
       }
     }
     // Destroy bombs mid-air
@@ -2399,7 +2454,7 @@ function updatePhil(dt){
     }
     // Hit boss
     if(boss&&!boss.dead&&!phil.attackedSet.has(boss)&&overlapBoss(atkBox)){
-      phil.attackedSet.add(boss); hitBoss(wep.dmg||1, atkBox);
+      phil.attackedSet.add(boss); hitBoss(attackDamage(wep), atkBox);
     }
   }
 
@@ -5055,7 +5110,7 @@ function heartPath(cx,cy){
 // and clear of the boss bar (x 330-630) and the power-up stack (top left).
 const WEAPON_BOX = { x:W-172, y:54, w:162, h:36 };
 function drawWeaponIcon(kind,cx,cy,scale){
-  const col=WEAPONS[kind].color;
+  const col=(WEAPONS[kind]||KUNGFU_ATTACK).color;
   ctx.save(); ctx.translate(cx,cy); if(scale) ctx.scale(scale,scale);
   if(kind==='sword'){
     ctx.strokeStyle=col; ctx.lineWidth=3; ctx.lineCap='round';
@@ -5073,6 +5128,12 @@ function drawWeaponIcon(kind,cx,cy,scale){
   } else if(kind==='boomerang'){
     ctx.strokeStyle=col; ctx.lineWidth=3.5; ctx.lineCap='round'; ctx.lineJoin='round';
     ctx.beginPath(); ctx.moveTo(-8,6); ctx.lineTo(0,-8); ctx.lineTo(8,6); ctx.stroke();
+  } else if(kind==='kungfu'){
+    ctx.fillStyle=col;                              // a bare fist
+    ctx.beginPath(); ctx.arc(1,0,7,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#8a836c'; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(-3,-3); ctx.lineTo(4,-3); ctx.moveTo(-3,1); ctx.lineTo(4,1); ctx.stroke();
+    ctx.fillStyle='#1f2430'; ctx.fillRect(-9,-4,4,9);  // cuff
   } else {
     ctx.fillStyle='#4a5058'; ctx.fillRect(-10,-3,19,7);
     ctx.fillStyle=col; ctx.fillRect(-8,-3,5,7);
@@ -5082,10 +5143,11 @@ function drawWeaponIcon(kind,cx,cy,scale){
 }
 function drawWeaponBox(){
   if(hasRay) return;                 // the shrink ray owns the attack button
-  const b=WEAPON_BOX, wep=curWeapon(), many=ownedWeapons().length>1;
+  const b=WEAPON_BOX, wep=curWeapon();
+  const many=ownedWeapons().length>1 && !martialActive();   // the gi ignores them
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(b.x,b.y,b.w,b.h);
   ctx.strokeStyle=wep.color; ctx.lineWidth=1.5; ctx.strokeRect(b.x+.5,b.y+.5,b.w-1,b.h-1);
-  drawWeaponIcon(shop.equipped,b.x+20,b.y+18);
+  drawWeaponIcon(martialActive()?'kungfu':shop.equipped,b.x+20,b.y+18);
   ctx.textAlign='left'; ctx.fillStyle=wep.color; ctx.font='bold 12px monospace';
   ctx.fillText(wep.name,b.x+38,b.y+15);
   ctx.font='10px monospace';
@@ -5105,7 +5167,8 @@ function drawWeaponBox(){
     // Once you own more than one, the corner already says how to swap, so the
     // second line is better spent on the reason you would
     ctx.fillStyle='#889';
-    ctx.fillText(many?('DAMAGE '+wep.dmg):'your trusty blade',b.x+38,b.y+27);
+    ctx.fillText(wep.martial ? 'DMG 1  \u2022  AIR KICK 2'
+                             : (many?('DAMAGE '+wep.dmg):'your trusty blade'),b.x+38,b.y+27);
   }
   ctx.textAlign='left';
 }
@@ -5544,6 +5607,64 @@ function drawHeldWeapon(kind, hx, hy, dir, mode, st){
   ctx.restore();
 }
 
+// Cloaks, drawn in drawStickman's local space: head centre (0,-bodyH-headR),
+// torso -bodyH..0, feet at legH. Drawn over the body and under the skin
+// decoration, so a Boss Rush skin's cap still sits on top of a ninja mask.
+function drawCloakOn(kind, dir, sc, bodyH, headR, bodyCol){
+  const def=CLOAKS[kind];
+  if(!def||kind==='none') return;
+  const hy=-bodyH-headR;
+  ctx.save();
+
+  if(kind==='glow'){                              // luminous, and nothing more
+    ctx.globalAlpha=0.30+Math.sin(frameN*0.09)*0.08;
+    ctx.fillStyle=def.color;
+    ctx.beginPath(); ctx.ellipse(0,-bodyH*0.5,13*sc,bodyH*0.85,0,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  // Torso garment, common to every cloak
+  ctx.fillStyle=def.color;
+  ctx.fillRect(-5*sc,-bodyH+5*sc,10*sc,bodyH-4*sc);
+
+  if(kind==='ninja'){
+    ctx.fillRect(-headR,hy-1,headR*2,4.5);        // mask band
+    ctx.strokeStyle=def.color; ctx.lineWidth=3*sc;
+    ctx.beginPath();                              // scarf, trailing behind
+    ctx.moveTo(-dir*3*sc,-bodyH+3*sc);
+    ctx.quadraticCurveTo(-dir*15*sc,-bodyH+2*sc+Math.sin(frameN*0.14)*3,
+                         -dir*22*sc,-bodyH+10*sc+Math.sin(frameN*0.14)*4);
+    ctx.stroke();
+  } else if(kind==='army'){
+    ctx.beginPath(); ctx.arc(0,hy-1,headR+1.5,Math.PI,Math.PI*2); ctx.fill();  // helmet
+    ctx.fillRect(-headR-2,hy-2,(headR+2)*2,2.5);
+    ctx.fillStyle='#6b7d3a';                      // webbing
+    ctx.fillRect(-5*sc,-bodyH+11*sc,10*sc,2.5*sc);
+  } else if(kind==='tux'){
+    ctx.fillStyle='#f2f2f2';                      // shirt front
+    ctx.beginPath();
+    ctx.moveTo(0,-bodyH+5*sc); ctx.lineTo(3*sc,-bodyH+15*sc); ctx.lineTo(-3*sc,-bodyH+15*sc);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#c1121f';                      // bow tie
+    ctx.beginPath();
+    ctx.moveTo(-3.5*sc,-bodyH+4*sc); ctx.lineTo(0,-bodyH+6.5*sc); ctx.lineTo(-3.5*sc,-bodyH+9*sc);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(3.5*sc,-bodyH+4*sc); ctx.lineTo(0,-bodyH+6.5*sc); ctx.lineTo(3.5*sc,-bodyH+9*sc);
+    ctx.closePath(); ctx.fill();
+  } else if(kind==='kungfu'){
+    ctx.strokeStyle='#c9c2ab'; ctx.lineWidth=1.5; // wrapped lapels
+    ctx.beginPath();
+    ctx.moveTo(-5*sc,-bodyH+5*sc); ctx.lineTo(0,-bodyH+13*sc); ctx.lineTo(5*sc,-bodyH+5*sc);
+    ctx.stroke();
+    ctx.fillStyle='#1f2430';                      // black belt
+    ctx.fillRect(-6*sc,-bodyH+15*sc,12*sc,3.5*sc);
+    ctx.fillRect(dir*2*sc,-bodyH+18*sc,2.5*sc,7*sc);
+  }
+  ctx.restore();
+  ctx.strokeStyle=bodyCol; ctx.fillStyle=bodyCol;
+}
+
 function drawStickman(x,y,w,h,opts){
   const {facingR,walkCycle,attacking,atkTimer,atkDur,shielding,
          color,swordColor,shieldColor,invTimer,dead,isPlayer,scale,isArcher,health,maxHealth,type,skin} = opts;
@@ -5618,7 +5739,8 @@ function drawStickman(x,y,w,h,opts){
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(-dir*(armL-3),-bodyH+12+armSw*.3); ctx.stroke();
     // Weapon at side
     const sx=-dir*(armL-3), sy=-bodyH+12+armSw*.3;
-    if(wepKind!=='sword'){ drawHeldWeapon(wepKind,sx,sy,dir,'side',wepState); }
+    if(opts.martial){ /* nothing held */ }
+    else if(wepKind!=='sword'){ drawHeldWeapon(wepKind,sx,sy,dir,'side',wepState); }
     else {
       ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2;
       ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(sx-dir*18,sy-8); ctx.stroke();
@@ -5627,7 +5749,30 @@ function drawStickman(x,y,w,h,opts){
     const thX=dir*(armL+8+atkProg*8), thY=-bodyH+6-atkProg*4;
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(thX,thY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(-dir*(armL-4),-bodyH+12); ctx.stroke();
-    if(wepKind!=='sword'){
+    if(opts.martial){
+      // Nothing in hand. On the ground it is a straight punch; in the air the
+      // back leg comes through as the flying kick, which is the hit that hurts.
+      ctx.strokeStyle=color; ctx.lineWidth=lw;
+      ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(thX+dir*6,thY+2); ctx.stroke();
+      ctx.fillStyle=color;
+      ctx.beginPath(); ctx.arc(thX+dir*8,thY+2,3.2*sc,0,Math.PI*2); ctx.fill();
+      if(opts.airborne){
+        ctx.beginPath();                          // kicking leg, straight out
+        ctx.moveTo(0,0); ctx.lineTo(dir*(20+atkProg*12)*sc,-2*sc); ctx.stroke();
+        ctx.beginPath();                          // trailing leg, tucked
+        ctx.moveTo(0,0); ctx.lineTo(-dir*8*sc,legH*0.7); ctx.stroke();
+      }
+      if(atkProg>0.35){
+        ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=2;
+        const r=(opts.airborne?20:13)*sc;
+        const ix=thX+dir*(opts.airborne?24:12), iy=thY+(opts.airborne?-4:2);
+        for(let i=0;i<3;i++){
+          ctx.beginPath();
+          ctx.arc(ix,iy,r+i*4,-0.6+ (dir<0?Math.PI:0), 0.6+(dir<0?Math.PI:0));
+          ctx.stroke();
+        }
+      }
+    } else if(wepKind!=='sword'){
       wepState.atkProg=atkProg;
       drawHeldWeapon(wepKind,thX,thY,dir,'thrust',wepState);
     } else {
@@ -5644,8 +5789,9 @@ function drawStickman(x,y,w,h,opts){
     const a2x=-dir*(armL-armSw*.3), a2y=-bodyH+10-Math.abs(armSw)*.2;
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(a1x,a1y); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(a2x,a2y); ctx.stroke();
-    // Weapon at rest
-    if(isPlayer&&wepKind!=='sword'){ drawHeldWeapon(wepKind,a1x,a1y,dir,'rest',wepState); }
+    // Weapon at rest — the gi has empty hands
+    if(isPlayer&&opts.martial){ /* nothing held */ }
+    else if(isPlayer&&wepKind!=='sword'){ drawHeldWeapon(wepKind,a1x,a1y,dir,'rest',wepState); }
     else if(isPlayer){ ctx.strokeStyle=swordColor||'#c8eeff'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(a1x,a1y); ctx.lineTo(a1x+dir*20,a1y-9); ctx.stroke(); }
     // Archer bow
     if(isArcher){ ctx.strokeStyle='#8B4513'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(a2x-dir*2,a2y-5,10,dir<0?-Math.PI*.6:-Math.PI*.4,dir<0?Math.PI*.6:Math.PI*.4,dir>0); ctx.stroke(); ctx.strokeStyle='rgba(200,200,200,0.7)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(a2x-dir*2,a2y-14); ctx.lineTo(a2x-dir*2,a2y+4); ctx.stroke(); }
@@ -5659,6 +5805,9 @@ function drawStickman(x,y,w,h,opts){
     // Soldier spear
     if(!isArcher&&!isPlayer&&type!=='bomber'&&type!=='glider'){ ctx.strokeStyle='#8B6914'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(a1x,a1y); ctx.lineTo(a1x+dir*26,a1y-12); ctx.stroke(); ctx.fillStyle='#bbaa22'; ctx.beginPath(); ctx.moveTo(a1x+dir*26,a1y-12); ctx.lineTo(a1x+dir*32,a1y-20); ctx.lineTo(a1x+dir*20,a1y-14); ctx.fill(); }
   }
+
+  // Cloak first, skin second: a skin's cap belongs on top of a ninja's mask
+  if(isPlayer&&opts.cloak&&opts.cloak!=='none') drawCloakOn(opts.cloak,dir,sc,bodyH,headR,color);
 
   // Skin decoration (Boss Rush unlocks). Drawn in the same local space as the
   // body above: head centred at (0,-bodyH-headR), torso -bodyH..0, feet at legH.
@@ -6607,14 +6756,29 @@ function drawPractice(){
 // shopping mid-level drops you back into the level rather than the menu. The
 // level underneath stays exactly as it was — nothing here touches the run.
 let shopSel=0, shopKeyHeld=false, shopReturn='TITLE', shopMsg='', shopMsgT=0;
-const shopRows = ()=>WEAPON_ORDER.length+1;                 // + a BACK row
-function shopCard(i){ return { x:30+i*232, y:132, w:212, h:252 }; }
-function shopBackBox(){ return { x:W/2-160, y:H-62, w:320, h:34 }; }
-function shopBox(i){ return i<WEAPON_ORDER.length ? shopCard(i) : shopBackBox(); }
+// Two tabs in one shop rather than a second shop screen: it is the one place the
+// player already goes to spend coins, and cloaks and weapons compete for the same
+// purse. Navigation is three bands — tabs, cards, back — so a tap and the
+// keyboard reach exactly the same things.
+let shopTab='weapons';                       // 'weapons' | 'cloaks'
+let shopBand=1;                              // 0 tabs, 1 cards, 2 back
+
+const shopIds = ()=> shopTab==='weapons' ? WEAPON_ORDER : CLOAK_ORDER;
+const shopDefs = ()=> shopTab==='weapons' ? WEAPONS : CLOAKS;
+function shopTabBox(i){ return { x:W/2-206+i*206, y:104, w:200, h:32 }; }
+function shopCard(i){
+  // Six cloaks will not fit at the weapons' width, so each tab sets its own
+  return shopTab==='weapons'
+    ? { x:30+i*232, y:150, w:212, h:240 }
+    : { x:22+i*153, y:150, w:143, h:240 };
+}
+function shopBackBox(){ return { x:W/2-160, y:H-58, w:320, h:32 }; }
 
 function openShop(from){
   initAC();
-  shopReturn=from; shopSel=Math.max(0,WEAPON_ORDER.indexOf(shop.equipped));
+  shopReturn=from;
+  shopTab='weapons'; shopBand=1;
+  shopSel=Math.max(0,WEAPON_ORDER.indexOf(shop.equipped));
   shopKeyHeld=true;                       // the key that opened this is still down
   shopMsg=''; shopMsgT=0;
   G.screen='SHOP';
@@ -6631,26 +6795,50 @@ function closeShop(){
 }
 function shopSay(msg){ shopMsg=msg; shopMsgT=2.2; }
 
-function shopActivate(){
-  if(shopSel>=WEAPON_ORDER.length){ closeShop(); return; }
-  const id=WEAPON_ORDER[shopSel], wep=WEAPONS[id];
+function setShopTab(tab){
+  if(shopTab===tab) return;
+  shopTab=tab;
+  shopSel=Math.max(0,shopIds().indexOf(tab==='weapons'?shop.equipped:shop.cloak));
+  SFX.pickup();
+}
+
+function buyWeapon(id){
+  const wep=WEAPONS[id];
   if(shop.owned.has(id)){
     if(shop.equipped===id){ shopSay(wep.name+' is already in your hands'); SFX.pickup(); return; }
-    equipWeapon(id); SFX.power(); shopSay(wep.name+' equipped!');
+    equipWeapon(id); SFX.power();
+    shopSay(martialActive() ? wep.name+' equipped — take the gi off to use it'
+                            : wep.name+' equipped!');
     return;
   }
-  if(shop.coins<wep.price){
-    SFX.broke(); shopSay('You need '+(wep.price-shop.coins)+' more coins');
-    return;
-  }
-  shop.coins-=wep.price;
-  shop.owned.add(id);
-  shop.equipped=id;
+  if(shop.coins<wep.price){ SFX.broke(); shopSay('You need '+(wep.price-shop.coins)+' more coins'); return; }
+  shop.coins-=wep.price; shop.owned.add(id); shop.equipped=id;
   // Buying the bazooka hands over a full load, so it is usable the moment you
   // walk out — a fresh purchase that fires nothing would just look broken.
   if(wep.ammoMax&&phil) phil.ammo=wep.ammoMax;
-  saveShop();
-  SFX.buy(); shopSay(wep.name+' bought and equipped!');
+  saveShop(); SFX.buy(); shopSay(wep.name+' bought and equipped!');
+}
+
+function buyCloak(id){
+  const cl=CLOAKS[id];
+  if(shop.cloaks.has(id)){
+    if(shop.cloak===id){ shopSay(cl.name+' is already on'); SFX.pickup(); return; }
+    equipCloak(id); SFX.power();
+    shopSay(cl.martial ? 'GI ON — kicks and punches, no weapons'
+                       : cl.name+' on!');
+    return;
+  }
+  if(shop.coins<cl.price){ SFX.broke(); shopSay('You need '+(cl.price-shop.coins)+' more coins'); return; }
+  shop.coins-=cl.price; shop.cloaks.add(id); shop.cloak=id;
+  saveShop(); SFX.buy(); shopSay(cl.name+' bought and on!');
+}
+
+function shopActivate(){
+  if(shopBand===2){ closeShop(); return; }
+  if(shopBand===0){ setShopTab(shopSel===0?'weapons':'cloaks'); shopBand=1; shopSel=0; return; }
+  const id=shopIds()[shopSel];
+  if(!id) return;
+  if(shopTab==='weapons') buyWeapon(id); else buyCloak(id);
 }
 
 function handleShopInput(dt){
@@ -6658,29 +6846,48 @@ function handleShopInput(dt){
   const left=keys['ArrowLeft']||keys['KeyA'], right=keys['ArrowRight']||keys['KeyD'];
   const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
   const go=keys['Enter']||keys['Space'], back=keys['Escape'];
-  const n=shopRows();
   if(left||right||up||down||go||back){
     if(!shopKeyHeld){
       shopKeyHeld=true;
       if(back) closeShop();
       else if(go) shopActivate();
-      // Up/down step between the card row and BACK; left/right walk the cards
-      else if(down){ shopSel=shopSel<WEAPON_ORDER.length?WEAPON_ORDER.length:0; SFX.pickup(); }
-      else if(up){ shopSel=shopSel<WEAPON_ORDER.length?WEAPON_ORDER.length:0; SFX.pickup(); }
-      else if(right){ shopSel=(shopSel+1)%n; SFX.pickup(); }
-      else if(left){ shopSel=(shopSel+n-1)%n; SFX.pickup(); }
+      else if(down){ shopBand=(shopBand+1)%3; shopSel=shopBandSel(); SFX.pickup(); }
+      else if(up){ shopBand=(shopBand+2)%3; shopSel=shopBandSel(); SFX.pickup(); }
+      else if(right||left){
+        const step=right?1:-1;
+        if(shopBand===0){ setShopTab(shopTab==='weapons'?'cloaks':'weapons'); shopSel=shopTab==='weapons'?0:1; }
+        else if(shopBand===1){ const n=shopIds().length; shopSel=(shopSel+step+n)%n; SFX.pickup(); }
+      }
     }
   } else shopKeyHeld=false;
 
   if(tapPoint){
-    for(let i=0;i<n;i++){
-      const b=shopBox(i);
-      if(tapPoint.x>=b.x-8&&tapPoint.x<=b.x+b.w+8&&tapPoint.y>=b.y-8&&tapPoint.y<=b.y+b.h+8){
-        shopSel=i; tapPoint=null; shopActivate(); return;
+    for(let i=0;i<2;i++){
+      const b=shopTabBox(i);
+      if(tapPoint.x>=b.x&&tapPoint.x<=b.x+b.w&&tapPoint.y>=b.y-8&&tapPoint.y<=b.y+b.h+8){
+        setShopTab(i===0?'weapons':'cloaks'); shopBand=1; shopSel=0; tapPoint=null; return;
       }
+    }
+    const ids=shopIds();
+    for(let i=0;i<ids.length;i++){
+      const b=shopCard(i);
+      if(tapPoint.x>=b.x-6&&tapPoint.x<=b.x+b.w+6&&tapPoint.y>=b.y-8&&tapPoint.y<=b.y+b.h+8){
+        shopBand=1; shopSel=i; tapPoint=null; shopActivate(); return;
+      }
+    }
+    const bb=shopBackBox();
+    if(tapPoint.x>=bb.x-8&&tapPoint.x<=bb.x+bb.w+8&&tapPoint.y>=bb.y-10&&tapPoint.y<=bb.y+bb.h+10){
+      tapPoint=null; closeShop(); return;
     }
     tapPoint=null;
   }
+}
+
+// Moving between bands should land somewhere sensible, not on index 0 every time
+function shopBandSel(){
+  if(shopBand===0) return shopTab==='weapons'?0:1;
+  if(shopBand===2) return 0;
+  return Math.max(0,shopIds().indexOf(shopTab==='weapons'?shop.equipped:shop.cloak));
 }
 
 function shopWrap(text,maxChars){
@@ -6698,89 +6905,103 @@ function drawShop(){
   ctx.textAlign='center';
   ctx.save();
   ctx.shadowColor='#ffb300'; ctx.shadowBlur=16;
-  ctx.fillStyle='#ffd54a'; ctx.font='bold 32px monospace';
-  ctx.fillText('WEAPON SHOP',W/2,58);
+  ctx.fillStyle='#ffd54a'; ctx.font='bold 28px monospace';
+  ctx.fillText('SHOP',W/2,52);
   ctx.restore();
 
   // Purse
   ctx.fillStyle='#ffd700';
-  ctx.beginPath(); ctx.ellipse(W/2-52,82,7,8,0,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#c8930a'; ctx.beginPath(); ctx.ellipse(W/2-52,82,3,5,0,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#ffd700'; ctx.font='bold 20px monospace'; ctx.textAlign='left';
-  ctx.fillText(shop.coins+' COINS',W/2-38,89);
+  ctx.beginPath(); ctx.ellipse(W/2-52,74,7,8,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#c8930a'; ctx.beginPath(); ctx.ellipse(W/2-52,74,3,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffd700'; ctx.font='bold 19px monospace'; ctx.textAlign='left';
+  ctx.fillText(shop.coins+' COINS',W/2-38,81);
   ctx.textAlign='center';
-  ctx.fillStyle='#6f7a86'; ctx.font='11px monospace';
-  ctx.fillText('Beat enemies and finish levels to earn coins',W/2,110);
 
-  for(let i=0;i<WEAPON_ORDER.length;i++){
-    const id=WEAPON_ORDER[i], wep=WEAPONS[id], b=shopCard(i);
-    const owned=shop.owned.has(id), equipped=shop.equipped===id;
-    const afford=shop.coins>=wep.price;
-    const sel=shopSel===i;
+  // Tabs
+  ['WEAPONS','CLOAKS'].forEach((label,i)=>{
+    const b=shopTabBox(i), on=(shopTab==='weapons')===(i===0);
+    const sel=shopBand===0&&((shopSel===0)===(i===0));
+    ctx.fillStyle=on?'rgba(120,90,20,0.55)':'rgba(0,0,0,0.35)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle=sel?'#ffffff':(on?'#ffd54a':'#3a3f48'); ctx.lineWidth=sel?3:2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+    ctx.fillStyle=on?'#ffe89a':'#79808a'; ctx.font='bold 14px monospace';
+    ctx.fillText(label,b.x+b.w/2,b.y+21);
+  });
+
+  const ids=shopIds(), defs=shopDefs(), weapons=shopTab==='weapons';
+  for(let i=0;i<ids.length;i++){
+    const id=ids[i], def=defs[id], b=shopCard(i);
+    const owned = weapons ? shop.owned.has(id) : shop.cloaks.has(id);
+    const worn  = weapons ? shop.equipped===id : shop.cloak===id;
+    const afford= shop.coins>=def.price;
+    const sel   = shopBand===1&&shopSel===i;
+    const narrow= !weapons;
 
     ctx.fillStyle=sel?'rgba(60,52,20,0.85)':'rgba(0,0,0,0.45)';
     ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.strokeStyle=sel?'#ffd54a':(equipped?wep.color:(owned?'#5a6a55':'#3a3f48'));
+    // Not def.color for the worn border: the ninja and tuxedo are near-black,
+    // and a black outline on a black card is no outline at all
+    ctx.strokeStyle=sel?'#ffd54a':(worn?'#7fd06a':(owned?'#5a6a55':'#3a3f48'));
     ctx.lineWidth=sel?3:2;
     ctx.strokeRect(b.x,b.y,b.w,b.h);
 
-    // Icon on its own plate so every weapon sits at the same optical size
-    ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(b.x+1,b.y+1,b.w-2,62);
+    ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(b.x+1,b.y+1,b.w-2,narrow?74:62);
     ctx.save();
     if(!owned&&!afford) ctx.globalAlpha=0.45;
-    drawWeaponIcon(id,b.x+b.w/2,b.y+32,2.1);
+    if(weapons) drawWeaponIcon(id,b.x+b.w/2,b.y+32,2.1);
+    else drawCloakIcon(id,b.x+b.w/2,b.y+40);
     ctx.restore();
 
-    ctx.fillStyle=owned?wep.color:(afford?'#e8e2d0':'#79808a');
-    ctx.font='bold 17px monospace';
-    ctx.fillText(wep.name,b.x+b.w/2,b.y+84);
+    // Same reason: the icon carries the garment's colour, the name stays legible
+    ctx.fillStyle=owned?(weapons?def.color:'#e8e2d0'):(afford?'#e8e2d0':'#79808a');
+    ctx.font='bold '+(narrow?13:17)+'px monospace';
+    ctx.fillText(def.name,b.x+b.w/2,b.y+(narrow?96:84));
 
-    ctx.fillStyle='#9aa4b0'; ctx.font='11px monospace';
-    shopWrap(wep.blurb,26).forEach((l,li)=>ctx.fillText(l,b.x+b.w/2,b.y+104+li*14));
+    ctx.fillStyle='#9aa4b0'; ctx.font=(narrow?'10px':'11px')+' monospace';
+    shopWrap(def.blurb,narrow?19:26).forEach((l,li)=>
+      ctx.fillText(l,b.x+b.w/2,b.y+(narrow?114:104)+li*13));
 
-    ctx.textAlign='left';
-    wep.stats.forEach((s,si)=>{
-      ctx.fillStyle='#7f8a96'; ctx.font='10px monospace';
-      ctx.fillText('•',b.x+14,b.y+150+si*16);
-      ctx.fillStyle='#c2cad4';
-      ctx.fillText(s,b.x+26,b.y+150+si*16);
-    });
-    ctx.textAlign='center';
-
-    // Price / status strip
-    const sy=b.y+b.h-40;
-    if(equipped){
-      ctx.fillStyle='rgba(60,140,70,0.5)'; ctx.fillRect(b.x+10,sy,b.w-20,28);
-      ctx.strokeStyle='#7fd06a'; ctx.lineWidth=1.5; ctx.strokeRect(b.x+10,sy,b.w-20,28);
-      ctx.fillStyle='#c8ffb8'; ctx.font='bold 13px monospace';
-      ctx.fillText('✓ EQUIPPED',b.x+b.w/2,sy+19);
-    } else if(owned){
-      ctx.fillStyle='rgba(40,60,90,0.5)'; ctx.fillRect(b.x+10,sy,b.w-20,28);
-      ctx.strokeStyle='#6a8fbf'; ctx.lineWidth=1.5; ctx.strokeRect(b.x+10,sy,b.w-20,28);
-      ctx.fillStyle='#bcd8ff'; ctx.font='bold 13px monospace';
-      ctx.fillText('OWNED — EQUIP',b.x+b.w/2,sy+19);
-    } else {
-      ctx.fillStyle=afford?'rgba(120,90,20,0.55)':'rgba(50,25,25,0.55)';
-      ctx.fillRect(b.x+10,sy,b.w-20,28);
-      ctx.strokeStyle=afford?'#ffd54a':'#7a4a4a'; ctx.lineWidth=1.5;
-      ctx.strokeRect(b.x+10,sy,b.w-20,28);
-      ctx.fillStyle=afford?'#ffe89a':'#c98d8d'; ctx.font='bold 13px monospace';
-      ctx.fillText(wep.price+' COINS',b.x+b.w/2,sy+19);
+    if(weapons){
+      ctx.textAlign='left';
+      def.stats.forEach((st,si)=>{
+        ctx.fillStyle='#7f8a96'; ctx.font='10px monospace';
+        ctx.fillText('\u2022',b.x+14,b.y+146+si*16);
+        ctx.fillStyle='#c2cad4';
+        ctx.fillText(st,b.x+26,b.y+146+si*16);
+      });
+      ctx.textAlign='center';
+    } else if(def.note){
+      ctx.fillStyle='#8a8256'; ctx.font='9px monospace';
+      shopWrap(def.note,21).forEach((l,li)=>ctx.fillText(l,b.x+b.w/2,b.y+158+li*12));
     }
+
+    const sy=b.y+b.h-36;
+    const strip=(fill,stroke,text,col)=>{
+      ctx.fillStyle=fill; ctx.fillRect(b.x+8,sy,b.w-16,26);
+      ctx.strokeStyle=stroke; ctx.lineWidth=1.5; ctx.strokeRect(b.x+8,sy,b.w-16,26);
+      ctx.fillStyle=col; ctx.font='bold '+(narrow?11:13)+'px monospace';
+      ctx.fillText(text,b.x+b.w/2,sy+18);
+    };
+    if(worn) strip('rgba(60,140,70,0.5)','#7fd06a',weapons?'\u2713 EQUIPPED':'\u2713 WEARING','#c8ffb8');
+    else if(owned) strip('rgba(40,60,90,0.5)','#6a8fbf',narrow?'WEAR IT':'OWNED \u2014 EQUIP','#bcd8ff');
+    else strip(afford?'rgba(120,90,20,0.55)':'rgba(50,25,25,0.55)',
+               afford?'#ffd54a':'#7a4a4a',
+               def.price+(narrow?'':' COINS'), afford?'#ffe89a':'#c98d8d');
+
     if(sel&&Math.sin(frameN*.12)>0){
-      ctx.fillStyle='#ffd54a'; ctx.font='bold 18px monospace';
-      ctx.fillText('▼',b.x+b.w/2,b.y-8);
+      ctx.fillStyle='#ffd54a'; ctx.font='bold 16px monospace';
+      ctx.fillText('\u25bc',b.x+b.w/2,b.y-6);
     }
   }
 
-  // BACK
-  const bb=shopBackBox(), bsel=shopSel>=WEAPON_ORDER.length;
+  const bb=shopBackBox(), bsel=shopBand===2;
   ctx.fillStyle=bsel?'rgba(120,90,20,0.55)':'rgba(0,0,0,0.4)';
   ctx.fillRect(bb.x,bb.y,bb.w,bb.h);
   ctx.strokeStyle=bsel?'#ffd54a':'#4a4636'; ctx.lineWidth=2;
   ctx.strokeRect(bb.x,bb.y,bb.w,bb.h);
-  ctx.fillStyle=bsel?'#ffffff':'#9a9276'; ctx.font='bold 15px monospace';
-  ctx.fillText(shopReturn==='PLAYING'?'BACK TO THE LEVEL':'BACK TO THE TITLE',W/2,bb.y+23);
+  ctx.fillStyle=bsel?'#ffffff':'#9a9276'; ctx.font='bold 14px monospace';
+  ctx.fillText(shopReturn==='PLAYING'?'BACK TO THE LEVEL':'BACK TO THE TITLE',W/2,bb.y+21);
 
   if(shopMsgT>0){
     ctx.globalAlpha=Math.min(1,shopMsgT*2);
@@ -6789,10 +7010,54 @@ function drawShop(){
     ctx.globalAlpha=1;
   } else {
     ctx.fillStyle='#445544'; ctx.font='11px monospace';
-    ctx.fillText(isTouchDevice?'Tap a weapon to buy or equip it'
-      :'Arrows/AD: Pick   Enter: Buy / Equip   Esc: Back',W/2,bb.y-12);
+    ctx.fillText(isTouchDevice?'Tap a tab, then tap what you want'
+      :'\u2191\u2193 tabs / cards / back   \u2190\u2192 choose   Enter: Buy or wear   Esc: Back',W/2,bb.y-12);
   }
   ctx.textAlign='left';
+}
+
+// Cloak icons are a torso on a hanger rather than a tiny Phil — at 40px a whole
+// stickman reads as a smudge, and the garment is the thing being sold.
+function drawCloakIcon(id,cx,cy){
+  const def=CLOAKS[id];
+  ctx.save(); ctx.translate(cx,cy);
+  if(id==='none'){
+    ctx.strokeStyle='#5a6470'; ctx.lineWidth=2; ctx.setLineDash([4,3]);
+    ctx.strokeRect(-13,-18,26,34); ctx.setLineDash([]);
+    ctx.fillStyle='#5a6470'; ctx.font='bold 11px monospace';
+    ctx.textAlign='center'; ctx.fillText('\u2014',0,4);
+    ctx.restore(); return;
+  }
+  if(def.glow){
+    ctx.globalAlpha=0.3+Math.sin(frameN*0.09)*0.1;
+    ctx.fillStyle=def.color;
+    ctx.beginPath(); ctx.ellipse(0,0,20,26,0,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+  ctx.strokeStyle='#8a94a2'; ctx.lineWidth=1.5;    // hanger
+  ctx.beginPath(); ctx.moveTo(0,-22); ctx.lineTo(0,-17);
+  ctx.moveTo(-11,-17); ctx.lineTo(11,-17); ctx.stroke();
+  ctx.fillStyle=def.color;                          // garment
+  ctx.beginPath();
+  ctx.moveTo(-12,-17); ctx.lineTo(12,-17); ctx.lineTo(15,-4);
+  ctx.lineTo(10,-4); ctx.lineTo(10,17); ctx.lineTo(-10,17); ctx.lineTo(-10,-4);
+  ctx.lineTo(-15,-4); ctx.closePath(); ctx.fill();
+  if(id==='tux'){
+    ctx.fillStyle='#f2f2f2';
+    ctx.beginPath(); ctx.moveTo(0,-17); ctx.lineTo(5,0); ctx.lineTo(-5,0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#c1121f'; ctx.fillRect(-4,-15,8,4);
+  } else if(id==='kungfu'){
+    ctx.strokeStyle='#c9c2ab'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(-9,-16); ctx.lineTo(0,-2); ctx.lineTo(9,-16); ctx.stroke();
+    ctx.fillStyle='#1f2430'; ctx.fillRect(-11,2,22,5);
+  } else if(id==='army'){
+    ctx.fillStyle='#6b7d3a'; ctx.fillRect(-10,1,20,4);
+  } else if(id==='ninja'){
+    ctx.strokeStyle=def.color; ctx.lineWidth=3; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-9,-12);
+    ctx.quadraticCurveTo(-19,-8+Math.sin(frameN*0.13)*2,-22,2); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // ══════════════════════════════════════════════════════
@@ -7041,7 +7306,7 @@ function titleItems(){
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
   items.push({ id:'rush', label:()=>'BOSS RUSH' });
   items.push({ id:'practice', label:()=>'PRACTICE' });
-  items.push({ id:'shop', label:()=>'WEAPON SHOP  ('+shop.coins+' coins)' });
+  items.push({ id:'shop', label:()=>'SHOP  ('+shop.coins+' coins)' });
   items.push({ id:'skin', label:()=>'SKIN: '+skinDef().name });
   items.push({ id:'music', label:()=>'MUSIC: '+(musicOn?'ON':'OFF') });
   return items;
@@ -7331,7 +7596,7 @@ const pauseItems = ()=> train ? [
 ] : [
   { id:'resume',  label:'RESUME' },
   { id:'restart', label:'RESTART LEVEL' },
-  { id:'shop',    label:'WEAPON SHOP  ('+shop.coins+')' },
+  { id:'shop',    label:'SHOP  ('+shop.coins+')' },
   { id:'music',   label:'MUSIC: '+(musicOn?'ON':'OFF') },
   { id:'map',     label:'WORLD MAP' },
   { id:'quit',    label:'QUIT TO TITLE' },
@@ -8572,6 +8837,7 @@ function loop(ts){
       // The shrink ray overrides the attack button, so Phil shouldn't be
       // brandishing a bazooka he currently can't fire
       weapon:hasRay?'sword':shop.equipped, boomOut:phil.boomOut, fireFx:phil.fireFx,
+      cloak:shop.cloak, martial:!hasRay&&martialActive(), airborne:!phil.onGround,
     });
     ctx.restore();
   }

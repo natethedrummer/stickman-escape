@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- Cloaks — six outfits Phil can wear, sold from a new **CLOAKS** tab in the shop. The Ninja wrap
+  with its trailing scarf, the Army kit he defected from, a Tuxedo, and a Glow suit that glows and
+  does nothing else are pure decoration. The **Kung Fu Gi** is not: it takes the weapon slot over
+  entirely, replacing whatever you bought with punches and kicks — short reach, a fast 0.26s swing,
+  and a **flying kick that hits for 2** if you land it in mid-air. That is the trade for 600 coins,
+  and it is why swapping weapons is refused while the gi is on. A cloak is a layer over the Boss
+  Rush skins rather than a replacement, so Golden Phil can wear a tuxedo
+  ([#5](https://github.com/natethedrummer/stickman-escape/issues/5),
+  [#10](https://github.com/natethedrummer/stickman-escape/issues/10))
+
+### Changed
+- The weapon shop is now just the **SHOP**, with WEAPONS and CLOAKS tabs. Navigation runs in three
+  bands — tabs, cards, back — so a tap and the keyboard reach exactly the same things
+- Shop saves made before cloaks existed load unchanged, with no cloak owned and none worn
+
+### Added
 - Training drills — four timed arenas, each about one skill, on a new **PRACTICE** screen that also
   hosts the tutorial. **Sword Timing**: one target lights at a time, hit it and the next lights.
   **Shield Drill**: two archers, and your score is blocks minus arrows that got through — standing
