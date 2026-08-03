@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Added
+- Shields — a third slot, sold from a new **SHIELDS** tab. The stock wood shield's rule (it only
+  stops what hits Phil's front) is the game's oldest lesson, so each upgrade bends exactly one thing
+  about it and pays for it somewhere else. The **Tower shield** (250) blocks arrows from *any* side
+  but slows his walk to 66 while it is up. The **Spiked shield** (350) blocks the same as wood and
+  deals 1 back to anything that runs into it — once per raise of the guard, so backing off and
+  charging again costs another. The **Magic shield** (500) carries 3 charges a life that swallow any
+  one hit whole, refilled on every respawn and shown as pips beside the hearts
+  ([#21](https://github.com/natethedrummer/stickman-escape/issues/21))
+
+### Changed
+- The tutorial's shield lesson and its summary now read differently if you are wearing a tower
+  shield, because "it only stops what hits his front" is not true of that one, and a tutorial that
+  teaches something false about your own kit is worse than no tutorial
+- The shield drill always uses the basic wood shield. A tower shield would let you stand still and
+  pass without turning once, which is the only thing that drill measures
+
+### Added
 - Cloaks — six outfits Phil can wear, sold from a new **CLOAKS** tab in the shop. The Ninja wrap
   with its trailing scarf, the Army kit he defected from, a Tuxedo, and a Glow suit that glows and
   does nothing else are pure decoration. The **Kung Fu Gi** is not: it takes the weapon slot over

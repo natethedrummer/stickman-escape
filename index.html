@@ -956,8 +956,13 @@ const TUT_STEPS = [
     done:()=> tut.held>0.7 && (In.jump()||In.atk()||In.start()||touches.start) },
   { id:'shield', safeX:1760, mercy:22,
     title:'Block two arrows',
-    body:'Hold the shield up — but it only stops arrows coming at Phil\'s FRONT. '+
-         'Face the archer, or they go straight through.',
+    // A tower shield makes the front-only rule untrue, and a tutorial that
+    // teaches something false about the kit you are wearing is worse than none
+    body:()=> curShield().allAngles
+      ? 'Hold the shield up. Yours is a tower shield, so it covers every side — '+
+        'the plain one only stops what hits Phil\'s FRONT.'
+      : 'Hold the shield up — but it only stops arrows coming at Phil\'s FRONT. '+
+        'Face the archer, or they go straight through.',
     keys:['X'], touch:['🛡'],
     done:()=> tut.blocks>=2 || (tutFoe('archer') && tutFoe('archer').dead) },
   { id:'check', safeX:2100,
@@ -1695,6 +1700,36 @@ const CLOAK_ORDER = ['none','ninja','army','tux','glow','kungfu'];
 function cloakDef(){ return CLOAKS[shop.cloak]||CLOAKS.none; }
 function martialActive(){ return cloakDef().martial===true; }
 
+// ── SHIELDS ──
+// A third slot. The stock shield's rule — it only stops what hits Phil's front —
+// is the game's oldest lesson, so each upgrade bends exactly one thing about it
+// and pays for it somewhere else.
+const SHIELDS = {
+  wood: { name:'WOOD SHIELD', price:0, color:'#4466cc', rim:'#2244aa', walk:100,
+    blurb:'The one Phil escaped with.',
+    stats:['Blocks arrows at the front','Blocks enemies at the front'] },
+  tower: { name:'TOWER SHIELD', price:250, color:'#8a929c', rim:'#4c545e', walk:66,
+    allAngles:true, tall:true,
+    blurb:'Covers every side. Heavy.',
+    stats:['Blocks arrows from ANY side','Walk slower while it is up'] },
+  spiked: { name:'SPIKED SHIELD', price:350, color:'#7a5230', rim:'#3f2a17', walk:100,
+    spikes:1,
+    blurb:'Whatever hits it, hurts.',
+    stats:['Blocks like the wood one','Enemies that hit it take 1'] },
+  magic: { name:'MAGIC SHIELD', price:500, color:'#8f6ad6', rim:'#4d327f', walk:100,
+    charges:3,
+    blurb:'Three charges that eat a hit whole.',
+    stats:['Blocks like the wood one','3 charges a life','A charge eats any one hit'] },
+};
+const SHIELD_ORDER = ['wood','tower','spiked','magic'];
+
+// Drills test the base skill. A tower shield would let you stand still and pass
+// the shield drill without turning once, which is the one thing it measures.
+function curShield(){
+  if(train&&train.id==='shield') return SHIELDS.wood;
+  return SHIELDS[shop.shield]||SHIELDS.wood;
+}
+
 const SHOP_KEY = 'pe_shop';
 function loadShop(){
   try{
@@ -1706,17 +1741,23 @@ function loadShop(){
       const cloaks=new Set((s.cloaks||[]).filter(c=>CLOAKS[c]));
       cloaks.add('none');                        // bare Phil is always available
       const cl=CLOAKS[s.cloak]&&cloaks.has(s.cloak)?s.cloak:'none';
-      return { coins:Math.max(0,s.coins|0), owned, equipped:eq, cloaks, cloak:cl };
+      const shields=new Set((s.shields||[]).filter(x=>SHIELDS[x]));
+      shields.add('wood');                       // he never loses the first one
+      const sh=SHIELDS[s.shield]&&shields.has(s.shield)?s.shield:'wood';
+      return { coins:Math.max(0,s.coins|0), owned, equipped:eq, cloaks, cloak:cl,
+               shields, shield:sh };
     }
   }catch(e){}
   return { coins:0, owned:new Set(['sword']), equipped:'sword',
-           cloaks:new Set(['none']), cloak:'none' };
+           cloaks:new Set(['none']), cloak:'none',
+           shields:new Set(['wood']), shield:'wood' };
 }
 let shop = loadShop();
 function saveShop(){
   try{ localStorage.setItem(SHOP_KEY,JSON.stringify({
     coins:shop.coins, owned:[...shop.owned], equipped:shop.equipped,
-    cloaks:[...shop.cloaks], cloak:shop.cloak })); }catch(e){}
+    cloaks:[...shop.cloaks], cloak:shop.cloak,
+    shields:[...shop.shields], shield:shop.shield })); }catch(e){}
 }
 // The gi takes the weapon slot over rather than sitting beside it. Wearing it
 // means giving up the bazooka, which is the whole point of it costing 600.
@@ -1740,6 +1781,12 @@ function equipWeapon(id){
   if(!WEAPONS[id]||!shop.owned.has(id)) return;
   shop.equipped=id; saveShop();
 }
+function equipShield(id){
+  if(!SHIELDS[id]||!shop.shields.has(id)) return;
+  shop.shield=id; saveShop();
+  if(phil) phil.shieldCharges=SHIELDS[id].charges||0;
+}
+
 function equipCloak(id){
   if(!CLOAKS[id]||!shop.cloaks.has(id)) return;
   shop.cloak=id; saveShop();
@@ -1783,7 +1830,9 @@ function initPhil(sx,sy){
     starT:0, speedT:0, multT:0, starHitT:0, auraPhase:0,
     // Rockets are per-life, not per-purchase — respawning rebuilds phil, so a
     // death hands them all back rather than leaving a dud weapon equipped.
-    ammo:WEAPONS.bazooka.ammoMax, boomOut:false, fireFx:0 };
+    ammo:WEAPONS.bazooka.ammoMax, boomOut:false, fireFx:0,
+    // Magic charges refill on every respawn, same as rockets do
+    shieldCharges:(SHIELDS[shop.shield]||SHIELDS.wood).charges||0, shieldFx:0 };
 }
 
 function spawnEnemies(defs){
@@ -2373,9 +2422,12 @@ function updatePhil(dt){
 
   const left=In.left(), right=In.right();
   const shielding = In.shield() && !phil.attacking;
+  // Each raise of the guard spikes a given enemy once. Cleared on lowering it,
+  // so a soldier that backs off and charges again takes another hit.
+  if(!shielding && phil.spikeSet) phil.spikeSet.clear();
   phil.shielding = shielding;
   const boosted = phil.speedT>0;
-  const speed = shielding ? 100 : (boosted?SPEED_RUN:240);
+  const speed = shielding ? (curShield().walk||100) : (boosted?SPEED_RUN:240);
 
   if(left){  phil.vx=-speed; phil.facingR=false; }
   else if(right){ phil.vx=speed; phil.facingR=true; }
@@ -2472,7 +2524,7 @@ function updatePhil(dt){
       // Shield block check (only arrows blockable)
       if(phil.shielding&&p.type==='arrow'){
         const fromRight=p.vx<0, facingRight=phil.facingR;
-        if(fromRight===facingRight){
+        if(curShield().allAngles||fromRight===facingRight){
           p.dead=true; burst(p.x,p.y,'#88ccff',6,70,0); SFX.block();
           if(tut) tut.blocks++;
           if(train&&train.id==='shield') train.score++;
@@ -2491,7 +2543,15 @@ function updatePhil(dt){
       // Shield block melee
       if(phil.shielding){
         const eInFront=phil.facingR?(e.x>phil.x):(e.x+e.w<phil.x+phil.w);
-        if(eInFront){ SFX.block(); phil.invTimer=0.3; continue; }
+        if(eInFront){
+          SFX.block(); phil.invTimer=0.3;
+          const sp=curShield().spikes;
+          if(sp&&!phil.spikeSet?.has(e)){
+            (phil.spikeSet||(phil.spikeSet=new Set())).add(e);
+            hitEnemy(e,sp);
+          }
+          continue;
+        }
       }
       philTakeDmg(0.5); phil.vx=phil.x<e.x+e.w/2?-220:220; phil.vy=-300; break;
     }
@@ -2556,7 +2616,25 @@ function philTakeDmg(amt, opts={}){
   // lava). Pit hits still run the respawnToSafe teleport below: skipping it would
   // leave Phil sitting in the gap to fall off the bottom of the level, which
   // would make picking up a star strictly worse than not having one.
+  // A magic charge eats the hit whole. The star still wins — it is free and
+  // temporary, so spending a charge under one would be strictly worse. Pit hits
+  // can be absorbed too: the respawnToSafe teleport below runs either way, so
+  // Phil is still lifted out of the gap rather than left in it.
   const immune = phil.starT>0;
+  if(!immune && phil.shieldCharges>0){
+    phil.shieldCharges--; phil.shieldFx=0.45;
+    burst(hitX,hitY,SHIELDS.magic.color,14,130,0);
+    scorePopup(hitX,hitY-18,'ABSORBED',SHIELDS.magic.color);
+    SFX.block();
+    if(setInv) phil.invTimer=INV_DUR;
+    if(respawnToSafe){
+      const sp=lastSafeGround||checkpointRespawn||levelData.playerStart;
+      phil.x=sp.x; phil.y=sp.y; phil.vx=0; phil.vy=0;
+      phil.onGround=false; phil.wasOnGround=false;
+      lastSafeGround={x:sp.x,y:sp.y};
+    }
+    return false;
+  }
   if(immune){
     // Contact is continuous (a saw only sets its cooldown when it actually
     // lands a hit), so throttle the feedback instead of firing it every frame.
@@ -2875,6 +2953,7 @@ function tickPowerups(dt){
     if(phil[key]<=0){ phil[key]=0; SFX.powerEnd(); }
   }
   if(phil.starHitT>0) phil.starHitT-=dt;
+  if(phil.shieldFx>0) phil.shieldFx-=dt;
   phil.auraPhase+=dt;
 }
 
@@ -5206,7 +5285,8 @@ function drawTutorialPanel(){
   if(!s) return;
   const caps = isTouchDevice ? s.touch : s.keys;
   const bw=560, bx=(W-bw)/2, by=58;
-  const body=wrapLine(s.body,bw-36,'13px monospace');
+  const text = typeof s.body==='function' ? s.body() : s.body;
+  const body=wrapLine(text,bw-36,'13px monospace');
   const bh=52+body.length*17+(caps.length?30:6);
 
   ctx.fillStyle='rgba(6,14,22,0.88)'; ctx.fillRect(bx,by,bw,bh);
@@ -5256,7 +5336,8 @@ function drawTutorialDone(){
   const rows=[
     ['Move and jump','Cross gaps, climb to high platforms'],
     ['Attack','Two hits beats a soldier; big ones take more'],
-    ['Shield','Only stops arrows hitting Phil at the front'],
+    ['Shield', curShield().allAngles ? 'Yours covers every side; a plain one is front only'
+                                     : 'Only stops arrows hitting Phil at the front'],
     ['Five hearts','Every hit costs half — ten hits and you are out'],
     ['Blue flag','Checkpoint. Die after it and you restart there'],
     ['Red flag','The end of the level'],
@@ -5297,7 +5378,7 @@ function drawHUD(){
   }
   // Score
   ctx.fillStyle='#ffd700'; ctx.font='bold 14px monospace'; ctx.textAlign='left';
-  ctx.fillText('SCORE: '+G.score,200,20);
+  ctx.fillText('SCORE: '+G.score,curShield().charges?245:200,20);
   // Lives
   ctx.fillStyle='#88aaff'; ctx.font='bold 13px monospace';
   ctx.fillText('LIVES: '+G.lives,360,20);
@@ -5308,6 +5389,16 @@ function drawHUD(){
     ctx.fillStyle='#ffd54a'; ctx.font='bold 13px monospace';
     ctx.fillText('⚷ KEY',462,20);
     ctx.restore();
+  }
+  // Magic shield charges, right of the hearts so they read as a second health bar
+  if(phil.shieldCharges>0||curShield().charges){
+    const cx0=200;
+    ctx.fillStyle='#8f6ad6'; ctx.font='bold 11px monospace';
+    ctx.fillText('\u25c8',cx0-14,20);
+    for(let i=0;i<(curShield().charges||0);i++){
+      ctx.fillStyle=i<phil.shieldCharges?'#c9a8ff':'#3a2f4d';
+      ctx.fillRect(cx0+i*9,11,7,9);
+    }
   }
   // Coins
   ctx.fillStyle='#ffd700'; ctx.font='bold 13px monospace';
@@ -5725,15 +5816,36 @@ function drawStickman(x,y,w,h,opts){
     // Shield arm (front arm raised holding shield)
     const shX=dir*(armL+6); const shY=-bodyH+4;
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(shX,shY); ctx.stroke();
-    // Shield rect
-    ctx.fillStyle=shieldColor||'#4466cc'; ctx.strokeStyle=shieldColor?'#4a3314':'#2244aa'; ctx.lineWidth=2;
-    const shieldX=shX+dir*4-6, shieldY=shY-12;
-    ctx.fillRect(shieldX,shieldY,14,22);
-    ctx.strokeRect(shieldX,shieldY,14,22);
-    // Shield cross
-    ctx.strokeStyle='#99aaff'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(shieldX+7,shieldY+2); ctx.lineTo(shieldX+7,shieldY+20); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(shieldX+2,shieldY+11); ctx.lineTo(shieldX+12,shieldY+11); ctx.stroke();
+    // Shield. Enemies keep the stock plate (they pass shieldColor); only Phil's
+    // varies, and the taller tower shield is why the size is not a constant.
+    const sd = isPlayer ? (SHIELDS[opts.shield]||SHIELDS.wood) : null;
+    const shW = sd&&sd.tall ? 16 : 14, shH = sd&&sd.tall ? 30 : 22;
+    ctx.fillStyle=sd?sd.color:(shieldColor||'#4466cc');
+    ctx.strokeStyle=sd?sd.rim:(shieldColor?'#4a3314':'#2244aa'); ctx.lineWidth=2;
+    const shieldX=shX+dir*4-6, shieldY=shY-(shH-10);
+    ctx.fillRect(shieldX,shieldY,shW,shH);
+    ctx.strokeRect(shieldX,shieldY,shW,shH);
+    if(sd&&sd.spikes){
+      ctx.fillStyle='#d8d3c4';                    // studs along the leading edge
+      for(let i=0;i<4;i++){
+        const sy2=shieldY+4+i*5;
+        ctx.beginPath();
+        ctx.moveTo(shieldX+(dir>0?shW:0),sy2);
+        ctx.lineTo(shieldX+(dir>0?shW+5:-5),sy2+2.5);
+        ctx.lineTo(shieldX+(dir>0?shW:0),sy2+5);
+        ctx.closePath(); ctx.fill();
+      }
+    } else if(sd&&sd.charges){
+      ctx.strokeStyle='#e0d0ff'; ctx.lineWidth=1.5; // rune, brighter with charges left
+      ctx.globalAlpha=(opts.charges>0?0.9:0.25);
+      ctx.beginPath(); ctx.arc(shieldX+shW/2,shieldY+shH/2,4.5,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(shieldX+shW/2,shieldY+3); ctx.lineTo(shieldX+shW/2,shieldY+shH-3); ctx.stroke();
+      ctx.globalAlpha=1;
+    } else {
+      ctx.strokeStyle='#99aaff'; ctx.lineWidth=1;   // the classic cross
+      ctx.beginPath(); ctx.moveTo(shieldX+shW/2,shieldY+2); ctx.lineTo(shieldX+shW/2,shieldY+shH-2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(shieldX+2,shieldY+shH/2); ctx.lineTo(shieldX+shW-2,shieldY+shH/2); ctx.stroke();
+    }
     ctx.strokeStyle=color; ctx.lineWidth=lw;
     // Back arm
     ctx.beginPath(); ctx.moveTo(0,-bodyH+5); ctx.lineTo(-dir*(armL-3),-bodyH+12+armSw*.3); ctx.stroke();
@@ -6760,17 +6872,23 @@ let shopSel=0, shopKeyHeld=false, shopReturn='TITLE', shopMsg='', shopMsgT=0;
 // player already goes to spend coins, and cloaks and weapons compete for the same
 // purse. Navigation is three bands — tabs, cards, back — so a tap and the
 // keyboard reach exactly the same things.
-let shopTab='weapons';                       // 'weapons' | 'cloaks'
+let shopTab='weapons';                       // 'weapons' | 'cloaks' | 'shields'
 let shopBand=1;                              // 0 tabs, 1 cards, 2 back
 
-const shopIds = ()=> shopTab==='weapons' ? WEAPON_ORDER : CLOAK_ORDER;
-const shopDefs = ()=> shopTab==='weapons' ? WEAPONS : CLOAKS;
-function shopTabBox(i){ return { x:W/2-206+i*206, y:104, w:200, h:32 }; }
+const SHOP_TABS = ['weapons','cloaks','shields'];
+const shopIds = ()=> shopTab==='weapons' ? WEAPON_ORDER
+                   : shopTab==='cloaks'  ? CLOAK_ORDER : SHIELD_ORDER;
+const shopDefs = ()=> shopTab==='weapons' ? WEAPONS
+                    : shopTab==='cloaks'  ? CLOAKS : SHIELDS;
+const shopOwnedSet = ()=> shopTab==='weapons' ? shop.owned
+                        : shopTab==='cloaks'  ? shop.cloaks : shop.shields;
+const shopWornId = ()=> shopTab==='weapons' ? shop.equipped
+                      : shopTab==='cloaks'  ? shop.cloak : shop.shield;
+function shopTabBox(i){ return { x:W/2-309+i*206, y:104, w:200, h:32 }; }
 function shopCard(i){
   // Six cloaks will not fit at the weapons' width, so each tab sets its own
-  return shopTab==='weapons'
-    ? { x:30+i*232, y:150, w:212, h:240 }
-    : { x:22+i*153, y:150, w:143, h:240 };
+  if(shopTab==='cloaks') return { x:22+i*153, y:150, w:143, h:240 };
+  return { x:30+i*232, y:150, w:212, h:240 };      // weapons and shields: 4 wide
 }
 function shopBackBox(){ return { x:W/2-160, y:H-58, w:320, h:32 }; }
 
@@ -6798,7 +6916,7 @@ function shopSay(msg){ shopMsg=msg; shopMsgT=2.2; }
 function setShopTab(tab){
   if(shopTab===tab) return;
   shopTab=tab;
-  shopSel=Math.max(0,shopIds().indexOf(tab==='weapons'?shop.equipped:shop.cloak));
+  shopSel=Math.max(0,shopIds().indexOf(shopWornId()));
   SFX.pickup();
 }
 
@@ -6833,12 +6951,27 @@ function buyCloak(id){
   saveShop(); SFX.buy(); shopSay(cl.name+' bought and on!');
 }
 
+function buyShield(id){
+  const sd=SHIELDS[id];
+  if(shop.shields.has(id)){
+    if(shop.shield===id){ shopSay(sd.name+' is already on his arm'); SFX.pickup(); return; }
+    equipShield(id); SFX.power(); shopSay(sd.name+' equipped!');
+    return;
+  }
+  if(shop.coins<sd.price){ SFX.broke(); shopSay('You need '+(sd.price-shop.coins)+' more coins'); return; }
+  shop.coins-=sd.price; shop.shields.add(id); shop.shield=id;
+  if(phil) phil.shieldCharges=sd.charges||0;
+  saveShop(); SFX.buy(); shopSay(sd.name+' bought and equipped!');
+}
+
 function shopActivate(){
   if(shopBand===2){ closeShop(); return; }
-  if(shopBand===0){ setShopTab(shopSel===0?'weapons':'cloaks'); shopBand=1; shopSel=0; return; }
+  if(shopBand===0){ setShopTab(SHOP_TABS[shopSel]||'weapons'); shopBand=1; shopSel=0; return; }
   const id=shopIds()[shopSel];
   if(!id) return;
-  if(shopTab==='weapons') buyWeapon(id); else buyCloak(id);
+  if(shopTab==='weapons') buyWeapon(id);
+  else if(shopTab==='cloaks') buyCloak(id);
+  else buyShield(id);
 }
 
 function handleShopInput(dt){
@@ -6855,17 +6988,20 @@ function handleShopInput(dt){
       else if(up){ shopBand=(shopBand+2)%3; shopSel=shopBandSel(); SFX.pickup(); }
       else if(right||left){
         const step=right?1:-1;
-        if(shopBand===0){ setShopTab(shopTab==='weapons'?'cloaks':'weapons'); shopSel=shopTab==='weapons'?0:1; }
+        if(shopBand===0){
+          const i=(SHOP_TABS.indexOf(shopTab)+step+SHOP_TABS.length)%SHOP_TABS.length;
+          setShopTab(SHOP_TABS[i]); shopSel=i;
+        }
         else if(shopBand===1){ const n=shopIds().length; shopSel=(shopSel+step+n)%n; SFX.pickup(); }
       }
     }
   } else shopKeyHeld=false;
 
   if(tapPoint){
-    for(let i=0;i<2;i++){
+    for(let i=0;i<SHOP_TABS.length;i++){
       const b=shopTabBox(i);
       if(tapPoint.x>=b.x&&tapPoint.x<=b.x+b.w&&tapPoint.y>=b.y-8&&tapPoint.y<=b.y+b.h+8){
-        setShopTab(i===0?'weapons':'cloaks'); shopBand=1; shopSel=0; tapPoint=null; return;
+        setShopTab(SHOP_TABS[i]); shopBand=1; shopSel=0; tapPoint=null; return;
       }
     }
     const ids=shopIds();
@@ -6885,9 +7021,9 @@ function handleShopInput(dt){
 
 // Moving between bands should land somewhere sensible, not on index 0 every time
 function shopBandSel(){
-  if(shopBand===0) return shopTab==='weapons'?0:1;
+  if(shopBand===0) return Math.max(0,SHOP_TABS.indexOf(shopTab));
   if(shopBand===2) return 0;
-  return Math.max(0,shopIds().indexOf(shopTab==='weapons'?shop.equipped:shop.cloak));
+  return Math.max(0,shopIds().indexOf(shopWornId()));
 }
 
 function shopWrap(text,maxChars){
@@ -6918,9 +7054,9 @@ function drawShop(){
   ctx.textAlign='center';
 
   // Tabs
-  ['WEAPONS','CLOAKS'].forEach((label,i)=>{
-    const b=shopTabBox(i), on=(shopTab==='weapons')===(i===0);
-    const sel=shopBand===0&&((shopSel===0)===(i===0));
+  ['WEAPONS','CLOAKS','SHIELDS'].forEach((label,i)=>{
+    const b=shopTabBox(i), on=shopTab===SHOP_TABS[i];
+    const sel=shopBand===0&&shopSel===i;
     ctx.fillStyle=on?'rgba(120,90,20,0.55)':'rgba(0,0,0,0.35)';
     ctx.fillRect(b.x,b.y,b.w,b.h);
     ctx.strokeStyle=sel?'#ffffff':(on?'#ffd54a':'#3a3f48'); ctx.lineWidth=sel?3:2;
@@ -6929,14 +7065,16 @@ function drawShop(){
     ctx.fillText(label,b.x+b.w/2,b.y+21);
   });
 
-  const ids=shopIds(), defs=shopDefs(), weapons=shopTab==='weapons';
+  const ids=shopIds(), defs=shopDefs();
+  const weapons=shopTab==='weapons', shields=shopTab==='shields';
+  const ownedSet=shopOwnedSet(), wornId=shopWornId();
   for(let i=0;i<ids.length;i++){
     const id=ids[i], def=defs[id], b=shopCard(i);
-    const owned = weapons ? shop.owned.has(id) : shop.cloaks.has(id);
-    const worn  = weapons ? shop.equipped===id : shop.cloak===id;
+    const owned = ownedSet.has(id);
+    const worn  = wornId===id;
     const afford= shop.coins>=def.price;
     const sel   = shopBand===1&&shopSel===i;
-    const narrow= !weapons;
+    const narrow= shopTab==='cloaks';
 
     ctx.fillStyle=sel?'rgba(60,52,20,0.85)':'rgba(0,0,0,0.45)';
     ctx.fillRect(b.x,b.y,b.w,b.h);
@@ -6950,11 +7088,12 @@ function drawShop(){
     ctx.save();
     if(!owned&&!afford) ctx.globalAlpha=0.45;
     if(weapons) drawWeaponIcon(id,b.x+b.w/2,b.y+32,2.1);
+    else if(shields) drawShieldIcon(id,b.x+b.w/2,b.y+31);
     else drawCloakIcon(id,b.x+b.w/2,b.y+40);
     ctx.restore();
 
     // Same reason: the icon carries the garment's colour, the name stays legible
-    ctx.fillStyle=owned?(weapons?def.color:'#e8e2d0'):(afford?'#e8e2d0':'#79808a');
+    ctx.fillStyle=owned?((weapons||shields)?def.color:'#e8e2d0'):(afford?'#e8e2d0':'#79808a');
     ctx.font='bold '+(narrow?13:17)+'px monospace';
     ctx.fillText(def.name,b.x+b.w/2,b.y+(narrow?96:84));
 
@@ -6962,7 +7101,7 @@ function drawShop(){
     shopWrap(def.blurb,narrow?19:26).forEach((l,li)=>
       ctx.fillText(l,b.x+b.w/2,b.y+(narrow?114:104)+li*13));
 
-    if(weapons){
+    if(weapons||shields){
       ctx.textAlign='left';
       def.stats.forEach((st,si)=>{
         ctx.fillStyle='#7f8a96'; ctx.font='10px monospace';
@@ -6983,7 +7122,7 @@ function drawShop(){
       ctx.fillStyle=col; ctx.font='bold '+(narrow?11:13)+'px monospace';
       ctx.fillText(text,b.x+b.w/2,sy+18);
     };
-    if(worn) strip('rgba(60,140,70,0.5)','#7fd06a',weapons?'\u2713 EQUIPPED':'\u2713 WEARING','#c8ffb8');
+    if(worn) strip('rgba(60,140,70,0.5)','#7fd06a',narrow?'\u2713 WEARING':'\u2713 EQUIPPED','#c8ffb8');
     else if(owned) strip('rgba(40,60,90,0.5)','#6a8fbf',narrow?'WEAR IT':'OWNED \u2014 EQUIP','#bcd8ff');
     else strip(afford?'rgba(120,90,20,0.55)':'rgba(50,25,25,0.55)',
                afford?'#ffd54a':'#7a4a4a',
@@ -7014,6 +7153,32 @@ function drawShop(){
       :'\u2191\u2193 tabs / cards / back   \u2190\u2192 choose   Enter: Buy or wear   Esc: Back',W/2,bb.y-12);
   }
   ctx.textAlign='left';
+}
+
+// Shield icons show the shape, since that is the whole difference between them.
+function drawShieldIcon(id,cx,cy){
+  const def=SHIELDS[id], tall=def.tall;
+  const w=tall?30:26, h=tall?42:34;
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.fillStyle=def.color; ctx.fillRect(-w/2,-h/2,w,h);
+  ctx.strokeStyle=def.rim; ctx.lineWidth=2.5; ctx.strokeRect(-w/2,-h/2,w,h);
+  if(def.spikes){
+    ctx.fillStyle='#d8d3c4';
+    for(let i=0;i<4;i++){
+      const y=-h/2+5+i*8;
+      ctx.beginPath(); ctx.moveTo(w/2,y); ctx.lineTo(w/2+7,y+3.5); ctx.lineTo(w/2,y+7);
+      ctx.closePath(); ctx.fill();
+    }
+  } else if(def.charges){
+    ctx.strokeStyle='#e0d0ff'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(0,0,7,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,-h/2+4); ctx.lineTo(0,h/2-4); ctx.stroke();
+  } else {
+    ctx.strokeStyle='#99aaff'; ctx.lineWidth=1.8;
+    ctx.beginPath(); ctx.moveTo(0,-h/2+4); ctx.lineTo(0,h/2-4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-w/2+4,0); ctx.lineTo(w/2-4,0); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // Cloak icons are a torso on a hanger rather than a tiny Phil — at 40px a whole
@@ -8838,6 +9003,7 @@ function loop(ts){
       // brandishing a bazooka he currently can't fire
       weapon:hasRay?'sword':shop.equipped, boomOut:phil.boomOut, fireFx:phil.fireFx,
       cloak:shop.cloak, martial:!hasRay&&martialActive(), airborne:!phil.onGround,
+      shield:shop.shield, charges:phil.shieldCharges,
     });
     ctx.restore();
   }
