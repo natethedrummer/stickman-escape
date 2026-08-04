@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- Phil is not a machine. Three lines added with the dialogue and the museum implied Factory 999 had
+  built him on an assembly line and that "Unit 47" was a model number — which contradicts the game's
+  own premise, where he is a soldier tired of taking orders who walked away, and the intro cutscene
+  is about everybody standing in the same line and getting the same orders. The factory now builds
+  war machines, Phil served a year guarding its floor, and Foreman-9 calls him **Recruit 47**.
+  Caught by Teddy, who noticed it in the Foreman's museum entry
+
 ### Added
 - Museum — a **MUSEUM** row on the title screen opens a gallery of all 5 enemies and all 12 bosses.
   An entry unlocks the first time you meet that character in the game; until then it is a silhouette
