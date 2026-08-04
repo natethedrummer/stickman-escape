@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+- Endless mode — levels that keep coming until you run out of lives, under the new **EXTRA MODES**
+  row. Depth climbs through the campaign's own world/level pairs rather than pinning one and turning
+  a dial, because enemy variety, hazards and moving platforms are all gated on literal world/level
+  checks: climbing the pairs is the only thing that actually opens the roster up, and the scenery
+  changes for free. Boss levels are skipped entirely. Every depth gets a fresh seed and every run
+  gets a fresh one on top, so the same eight layouts never come round again. Past depth 12 the
+  enemies also speed up, capped at 1.35x. You get 3 lives for the whole run, health carries between
+  depths with one heart back per depth cleared, and best depth and best score are kept
+  ([#8](https://github.com/natethedrummer/stickman-escape/issues/8))
+
+### Changed
+- **BOSS RUSH** on the title screen became **EXTRA MODES**, holding Boss Rush and Endless together
+  with each one's best score. The title menu was at nine rows and out of room, and grouping them
+  means the next mode does not need a row of its own either
+- Endless pays coins at every fifth depth rather than from kills. An infinite level that drops coins
+  is an infinite coin printer, and the shop is meant to be earned in the campaign
+
 ### Fixed
 - Phil is not a machine. Three lines added with the dialogue and the museum implied Factory 999 had
   built him on an assembly line and that "Unit 47" was a model number — which contradicts the game's
