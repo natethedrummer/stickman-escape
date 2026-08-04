@@ -1837,6 +1837,7 @@ function initPhil(sx,sy){
 
 function spawnEnemies(defs){
   return defs.map(d=>{
+    museumSee(d.type);          // encountering one is what unlocks its page
     const cfg=ENEMY_CFG[d.type]||ENEMY_CFG.soldier;
     return {
       type:d.type, x:d.x, y:d.y, vx:0,vy:0, w:cfg.w,h:cfg.h,
@@ -2694,6 +2695,7 @@ function respawnPhil(){
 
 function levelComplete(){
   addScore(500); SFX.clear();
+  if(museumDirty) saveMuseum();
   lastCoinAward=addCoins(levelData.isBoss?COIN_BOSS:COIN_LEVEL);
   // Points earned in this level, not the running campaign total — that's the only
   // figure that means anything when you replay a level from the map.
@@ -3147,6 +3149,7 @@ function hitEnemy(e, dmg){
     if(combo>=3){ burst(e.x+e.w/2,e.y+e.h/2,combo>=5?'#ff88ff':'#ffaa00',16,150,300); SFX.coin(); }
     burst(e.x+e.w/2,e.y+e.h/2,'#ff4422',14,130,350); SFX.die();
     // No coins from the tutorial — it is replayable, and a drill shouldn't pay
+    museumKill(e.type);
     if(train&&train.id==='survive') train.score++;
     if(!tut&&!train) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
     if(e.type==='heavy'&&Math.random()<0.5) spawnHealthPickup(e);
@@ -3321,6 +3324,7 @@ function updateProjs(dt){
 //  BOSSES
 // ══════════════════════════════════════════════════════
 function spawnBoss(type, worldW){
+  museumSee(type);
   const cx=worldW-300;
   if(type==='giant') return { type, x:cx-27,y:GROUND_Y-105, vx:0,vy:0, w:55,h:105,
     health:10,maxHealth:10, facingR:false, onGround:false, wasOnGround:false,
@@ -3509,6 +3513,7 @@ function fireShrinkRay(){
 function bossKilled(){
   if(boss.type==='mech'&&boss.phase<3&&G.mode!=='RUSH'){ startShrinkPhase(); return; }
   boss.dead=true; boss.deathTimer=3.0; SFX.win(); shake=1.2;
+  museumKill(boss.type);
   const focus=getBossFocusBox()||boss;
   for(let i=0;i<5;i++) setTimeout(()=>{
     burst(focus.x+Math.random()*focus.w,focus.y+Math.random()*focus.h,'#ffaa00',16,160,300);
@@ -6743,6 +6748,241 @@ function drawSecretPicker(){
 }
 
 // ══════════════════════════════════════════════════════
+//  MUSEUM
+// ══════════════════════════════════════════════════════
+// Every enemy and boss, drawn with the game's own art rather than a portrait —
+// the point of a museum is the artwork, so the boss panels call drawBoss() on a
+// real object from spawnBoss with the globals temporarily pointed at it. That
+// makes spawnBoss the single source of truth for what a boss looks like, here
+// and in a fight.
+const MUSEUM = [
+  { id:'soldier', kind:'enemy',
+    blurb:'Standard infantry. Patrols its platform until it spots Phil, then commits.' },
+  { id:'archer', kind:'enemy',
+    blurb:'Hangs back and shoots. Its arrows are the only thing a plain shield stops.' },
+  { id:'heavy', kind:'enemy',
+    blurb:'Four hits and a raised guard. The hammer is the one weapon that ignores it.' },
+  { id:'bomber', kind:'enemy',
+    blurb:'Lobs arcing bombs and retreats. The bombs can be knocked out of the air.' },
+  { id:'glider', kind:'enemy',
+    blurb:'Dives from above. A swing from the ground misses — meet it in the air.' },
+  { id:'giant', kind:'boss', blurb:'The commander who came after him first. Swings a club and stamps.' },
+  { id:'anaconda', kind:'boss', blurb:'The forest\'s own guardian. Coils, lunges, and comes apart in segments.' },
+  { id:'lizard', kind:'boss', blurb:'Desert machine built to hunt. Charges in a straight line and breathes fire.' },
+  { id:'frostwarden', kind:'boss', blurb:'Sentinel of the glacier. Throws ice and freezes the ground under Phil.' },
+  { id:'yeti', kind:'boss', blurb:'Big, loud and slow. Two out of three is not enough to stop him.' },
+  { id:'foreman', kind:'boss', blurb:'Runs the assembly line that built Phil. Still calls him Unit 47.' },
+  { id:'revenant', kind:'boss', blurb:'A prototype that will not stay down. Splits in two when it is hurt.' },
+  { id:'tunnelfiend', kind:'boss', blurb:'Ambusher from the depths. You hear it before you ever see it.' },
+  { id:'mole', kind:'boss', blurb:'Burrows out of the floor wherever Phil is standing.' },
+  { id:'captain', kind:'boss', blurb:'Riot shield, no patience. Pursues behind an iron wall.' },
+  { id:'agent', kind:'boss', blurb:'Berlin\'s raid chief. The last thing between Phil and the border.' },
+  { id:'mech', kind:'boss', blurb:'The Stickman Army\'s supreme weapon. Fists, lasers, and then the shrink ray.' },
+];
+
+const MUSEUM_KEY='pe_museum';
+function loadMuseum(){
+  try{
+    const m=JSON.parse(localStorage.getItem(MUSEUM_KEY));
+    if(m&&typeof m==='object'){
+      const ids=new Set(MUSEUM.map(e=>e.id));
+      const kills={};
+      for(const [k,v] of Object.entries(m.kills||{})) if(ids.has(k)&&v>0) kills[k]=v|0;
+      return { seen:new Set((m.seen||[]).filter(id=>ids.has(id))), kills };
+    }
+  }catch(e){}
+  return { seen:new Set(), kills:{} };
+}
+let museum = loadMuseum();
+let museumDirty = false;
+function saveMuseum(){
+  try{ localStorage.setItem(MUSEUM_KEY,JSON.stringify({
+    seen:[...museum.seen], kills:museum.kills })); }catch(e){}
+  museumDirty=false;
+}
+// Called from spawn paths that run every level start, so the writes are batched
+// to the end of the frame rather than hitting localStorage per enemy.
+function museumSee(id){
+  if(!id||museum.seen.has(id)) return;
+  museum.seen.add(id); museumDirty=true;
+}
+function museumKill(id){
+  if(!id) return;
+  museum.kills[id]=(museum.kills[id]||0)+1; museumDirty=true;
+}
+function museumName(e){
+  return e.kind==='enemy'
+    ? ({soldier:'Stickman Soldier',archer:'Stickman Archer',heavy:'Heavy Soldier',
+        bomber:'Bomb Thrower',glider:'Stickman Glider'})[e.id]
+    : (getBossMeta(e.id).name||e.id);
+}
+
+let musSel=0, musKeyHeld=false, musFake=null, musPhase=0;
+function musRow(i){ return { x:28, y:88+i*24, w:258, h:22 }; }
+function musPanel(){ return { x:302, y:88, w:630, h:408 }; }
+
+function openMuseum(){
+  initAC();
+  // The boss draw functions read the live globals. Opening the museum straight
+  // off the title means there is no level and no Phil yet, so give them one.
+  if(!levelData) levelData=genTutorialLevel();
+  if(!phil) initPhil(60,GROUND_Y-PHIL_H-1);
+  musSel=0; musKeyHeld=true; musFake=null; musPhase=0;
+  G.screen='MUSEUM';
+  SFX.pickup();
+}
+
+function musEntry(){ return MUSEUM[musSel]; }
+function musUnlocked(e){ return museum.seen.has(e.id); }
+
+function handleMuseumInput(){
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const back=keys['Escape']||keys['Enter'];
+  const n=MUSEUM.length;
+  if(up||down||back){
+    if(!musKeyHeld){
+      musKeyHeld=true;
+      if(back){ titleKeyHeld=true; G.screen='TITLE'; SFX.pickup(); if(museumDirty) saveMuseum(); }
+      else if(down){ musSel=(musSel+1)%n; musFake=null; SFX.pickup(); }
+      else if(up){ musSel=(musSel+n-1)%n; musFake=null; SFX.pickup(); }
+    }
+  } else musKeyHeld=false;
+
+  if(tapPoint){
+    const first=musRow(0), last=musRow(n-1);
+    if(tapPoint.x>first.x-16&&tapPoint.x<first.x+first.w+16&&
+       tapPoint.y>first.y-10&&tapPoint.y<last.y+last.h+10){
+      let best=0, bestD=Infinity;
+      for(let i=0;i<n;i++){
+        const b=musRow(i), d=Math.abs(tapPoint.y-(b.y+b.h/2));
+        if(d<bestD){ bestD=d; best=i; }
+      }
+      if(best!==musSel){ musSel=best; musFake=null; SFX.pickup(); }
+      tapPoint=null; return;
+    }
+    // Anywhere else leaves, which is the only exit a phone has
+    tapPoint=null; titleKeyHeld=true; G.screen='TITLE'; SFX.pickup();
+    if(museumDirty) saveMuseum();
+  }
+}
+
+// The exhibit itself. Enemies go through drawStickman like they do in a level;
+// bosses borrow the globals for the length of one call and hand them straight
+// back, so nothing outside this function can observe the swap.
+function drawMuseumExhibit(e, cx, cy){
+  if(e.kind==='enemy'){
+    const cfg=ENEMY_CFG[e.id];
+    const sc=e.id==='glider'?2.4:2.2;
+    drawStickman(cx+cam.x-cfg.w/2, cy+cam.y-cfg.h, cfg.w, cfg.h, {
+      facingR:true, walkCycle:musPhase, attacking:false, atkTimer:0, atkDur:0.8,
+      shielding:e.id==='heavy', color:cfg.color,
+      swordColor:e.id==='heavy'?'#bba56a':'#888', shieldColor:cfg.shieldColor,
+      invTimer:0, dead:false, isPlayer:false, scale:sc,
+      isArcher:e.id==='archer', health:cfg.maxHealth, maxHealth:0, type:e.id,
+    });
+    return;
+  }
+  if(!musFake){
+    musFake=spawnBoss(e.id,1400);
+    musFake.invTimer=0; musFake.dead=false; musFake.deathTimer=0;
+    if(musFake.aiState==='INTRO') musFake.aiState='WALK';
+  }
+  musFake.walkCycle=musPhase;
+  musFake.facingR=true;
+  const savedBoss=boss, sx=cam.x, sy=cam.y;
+  boss=musFake;
+  // Frame the boss in the panel by moving the camera, not the boss: its draw
+  // code is written against world coordinates and some of it is absolute
+  cam.x=(musFake.x+musFake.w/2)-cx;
+  cam.y=(musFake.y+musFake.h)-cy;
+  try{ drawBoss(); }catch(err){ /* never let one exhibit take the screen down */ }
+  boss=savedBoss; cam.x=sx; cam.y=sy;
+}
+
+function drawMuseum(dt){
+  musPhase+=dt*2.2;
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#141018'); g.addColorStop(1,'#20182a');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#c9a8ff'; ctx.shadowBlur=14;
+  ctx.fillStyle='#e6d6ff'; ctx.font='bold 26px monospace';
+  ctx.fillText('MUSEUM',W/2,52);
+  ctx.restore();
+  const found=MUSEUM.filter(musUnlocked).length;
+  ctx.fillStyle='#8a7fa0'; ctx.font='11px monospace';
+  ctx.fillText(`${found} of ${MUSEUM.length} discovered — meet one in the game to unlock its page`,W/2,72);
+  ctx.textAlign='left';
+
+  // Index
+  for(let i=0;i<MUSEUM.length;i++){
+    const e=MUSEUM[i], b=musRow(i), sel=i===musSel, on=musUnlocked(e);
+    const hue=e.kind==='enemy'?'#7fd06a':'#ffbb55';
+    ctx.fillStyle=sel?'rgba(160,130,220,0.4)':'rgba(0,0,0,0.28)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    if(sel){ ctx.strokeStyle='#c9a8ff'; ctx.lineWidth=2; ctx.strokeRect(b.x,b.y,b.w,b.h); }
+    ctx.fillStyle=on?(sel?'#ffffff':hue):(sel?'#9a90b4':'#4e4760');
+    ctx.font='bold 12px monospace';
+    ctx.fillText(on?museumName(e):'? ? ?',b.x+10,b.y+15);
+    const k=museum.kills[e.id]||0;
+    if(on&&k>0){
+      ctx.textAlign='right';
+      ctx.fillStyle=sel?'#e6d6ff':'#6f6786'; ctx.font='11px monospace';
+      ctx.fillText(String(k),b.x+b.w-10,b.y+15);
+      ctx.textAlign='left';
+    }
+  }
+
+  // Exhibit
+  const p=musPanel(), e=musEntry(), on=musUnlocked(e);
+  ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(p.x,p.y,p.w,p.h);
+  ctx.strokeStyle='#4a4060'; ctx.lineWidth=2; ctx.strokeRect(p.x,p.y,p.w,p.h);
+  // Plinth
+  ctx.fillStyle='rgba(200,170,255,0.10)';
+  ctx.fillRect(p.x+40,p.y+250,p.w-80,10);
+
+  if(on){
+    ctx.save();
+    ctx.beginPath(); ctx.rect(p.x+2,p.y+2,p.w-4,262); ctx.clip();
+    drawMuseumExhibit(e,p.x+p.w/2,p.y+250);
+    ctx.restore();
+  } else {
+    ctx.textAlign='center';
+    ctx.fillStyle='#3d3552'; ctx.font='bold 90px monospace';
+    ctx.fillText('?',p.x+p.w/2,p.y+180);
+    ctx.fillStyle='#6f6786'; ctx.font='13px monospace';
+    ctx.fillText('Not met yet',p.x+p.w/2,p.y+220);
+    ctx.textAlign='left';
+  }
+
+  ctx.textAlign='center';
+  ctx.fillStyle=on?'#ffffff':'#5e5675'; ctx.font='bold 20px monospace';
+  ctx.fillText(on?museumName(e):'? ? ?',p.x+p.w/2,p.y+292);
+  // A locked boss must not leak its own tagline — that is half the reveal
+  ctx.fillStyle=on?(e.kind==='enemy'?'#7fd06a':'#ffbb55'):'#5e5675';
+  ctx.font='11px monospace';
+  ctx.fillText(!on ? (e.kind==='enemy'?'ENEMY':'BOSS')
+                   : (e.kind==='enemy'?'ENEMY':(getBossMeta(e.id).intro||'BOSS')),
+    p.x+p.w/2,p.y+312);
+
+  if(on){
+    ctx.fillStyle='#b9aecd'; ctx.font='13px monospace';
+    wrapLine(e.blurb,p.w-80,'13px monospace').forEach((l,i)=>
+      ctx.fillText(l,p.x+p.w/2,p.y+342+i*19));
+    const k=museum.kills[e.id]||0;
+    ctx.fillStyle='#8a7fa0'; ctx.font='bold 13px monospace';
+    ctx.fillText(k>0?('DEFEATED  '+k):'Not beaten yet',p.x+p.w/2,p.y+392);
+  }
+
+  ctx.fillStyle='#544c68'; ctx.font='11px monospace';
+  ctx.fillText(isTouchDevice?'Tap a name  •  tap anywhere else to leave'
+    :'Arrows/WASD: Browse   Esc: Back',W/2,H-18);
+  ctx.textAlign='left';
+}
+
+// ══════════════════════════════════════════════════════
 //  PRACTICE — the tutorial and the four drills
 // ══════════════════════════════════════════════════════
 // One title row for everything you do to get better, because the title menu was
@@ -7471,6 +7711,7 @@ function titleItems(){
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
   items.push({ id:'rush', label:()=>'BOSS RUSH' });
   items.push({ id:'practice', label:()=>'PRACTICE' });
+  items.push({ id:'museum', label:()=>'MUSEUM' });
   items.push({ id:'shop', label:()=>'SHOP  ('+shop.coins+' coins)' });
   items.push({ id:'skin', label:()=>'SKIN: '+skinDef().name });
   items.push({ id:'music', label:()=>'MUSIC: '+(musicOn?'ON':'OFF') });
@@ -7480,8 +7721,9 @@ function titleBox(i,count){
   const n=count||titleItems().length;
   // Tightens up as rows are added, so the footer never runs off the canvas. At 7+
   // the worlds subtitle is dropped too (see drawTitle) to buy back the space.
-  const gap=n>=7?24:(n>=6?27:(n>=5?28:32)), h=n>=7?22:(n>=6?25:(n>=5?26:28));
-  const top=n>=8?316:(n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372))));
+  const gap=n>=9?23:(n>=7?24:(n>=6?27:(n>=5?28:32)));
+  const h  =n>=9?21:(n>=7?22:(n>=6?25:(n>=5?26:28)));
+  const top=n>=9?308:(n>=8?316:(n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372)))));
   return { x:W/2-160, y:top+i*gap, w:320, h };
 }
 
@@ -7521,6 +7763,8 @@ function titleActivate(){
     startRushRun();
   } else if(id==='practice'){
     openPractice();
+  } else if(id==='museum'){
+    openMuseum();
   } else if(id==='shop'){
     openShop('TITLE');
   } else if(id==='music'){
@@ -8806,6 +9050,7 @@ function loop(ts){
   if(G.screen==='TITLE'){ drawTitle(); handleTitleInput(); return; }
   if(G.screen==='MAP'){ updateMap(dt); drawMap(); handleMapInput(); return; }
   if(G.screen==='PRACTICE'){ drawPractice(); handlePracticeInput(); return; }
+  if(G.screen==='MUSEUM'){ drawMuseum(dt); handleMuseumInput(); return; }
   if(G.screen==='TRAIN_DONE'){
     drawBackground(); drawPlatforms(); drawDecorations(); drawTrainDone();
     if(train.passed&&Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#ffe14d',10,140,0);

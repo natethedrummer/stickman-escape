@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- Museum — a **MUSEUM** row on the title screen opens a gallery of all 5 enemies and all 12 bosses.
+  An entry unlocks the first time you meet that character in the game; until then it is a silhouette
+  and a question mark, and a locked boss does not leak its own tagline. Each page shows the
+  character drawn with the **game's own art**, idling, alongside its name, what it does, and how many
+  of them Phil has beaten — counted across every run, so the soldier tally just keeps climbing.
+  Boss pages call the real `drawBoss()` on an object from `spawnBoss`, so an exhibit can never drift
+  from what you actually fight ([#20](https://github.com/natethedrummer/stickman-escape/issues/20))
+
+### Added
 - Shields — a third slot, sold from a new **SHIELDS** tab. The stock wood shield's rule (it only
   stops what hits Phil's front) is the game's oldest lesson, so each upgrade bends exactly one thing
   about it and pays for it somewhere else. The **Tower shield** (250) blocks arrows from *any* side
