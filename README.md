@@ -157,6 +157,12 @@ waiting as the finale. 12 fights, one run.
 
 Unlocked skins are saved and can be selected from the title screen — they work in the main campaign too.
 
+### 🏛️ Museum
+
+Pick **MUSEUM** on the title screen for a gallery of every enemy and boss in the game. Entries
+unlock the first time you meet that character, and each page shows them drawn with the game's own
+art, what they do, and how many you have beaten across every run you have ever played.
+
 ### Enemies
 - **Stickman Soldier** — Melee, patrols and chases Phil
 - **Stickman Archer** — Ranged, fires arrows that can be blocked with the shield
