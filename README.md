@@ -157,6 +157,16 @@ waiting as the finale. 12 fights, one run.
 
 Unlocked skins are saved and can be selected from the title screen — they work in the main campaign too.
 
+### ♾️ Endless
+
+Pick **EXTRA MODES → ENDLESS** for levels that never stop. Depth climbs through the worlds, so the
+enemies and hazards open up as you go and the scenery keeps changing; past depth 12 they speed up
+too. No boss fights. 3 lives for the whole run, health carries between depths with one heart back
+each time you clear one, and your best depth and score are kept.
+
+Coins are paid every fifth depth rather than per kill — otherwise an infinite level would be an
+infinite coin printer.
+
 ### 🏛️ Museum
 
 Pick **MUSEUM** on the title screen for a gallery of every enemy and boss in the game. Entries

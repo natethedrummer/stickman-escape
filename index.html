@@ -1187,9 +1187,12 @@ let tutKeep=null;               // campaign score/lives parked while the tutoria
 function tutFoe(type){ return enemies.find(e=>e.type===type)||null; }
 function tutStep(){ return tut ? TUT_STEPS[tut.i] : null; }
 
-function genLevel(world, level) {
+// `seedOverride` exists for endless mode. Campaign levels must stay stable —
+// their seed IS their identity, and a replayed level has to be the same level —
+// so the override is opt-in and nothing in the campaign passes it.
+function genLevel(world, level, seedOverride) {
   const isBoss = (level===5||level===10);
-  const rng = makeRNG(world*100+level);
+  const rng = makeRNG(seedOverride!=null ? seedOverride : world*100+level);
   if (isBoss) return genBossArena(world, level, rng);
 
   const worldW = 3800 + level*150;
@@ -2221,6 +2224,101 @@ function nextLevel(){
   startLevel();
 }
 
+// ── ENDLESS RUN ──
+// Depth walks the campaign's own (world, level) pairs upward rather than pinning
+// one and turning a difficulty dial. It has to: enemy variety, hazards and moving
+// platforms are all gated on literal world/level checks, not on `difficulty`, so
+// climbing the pairs is the only thing that actually opens the roster up — and it
+// changes the scenery for free. Boss levels are skipped; this mode has no bosses.
+const ENDLESS_LEVELS = [1,2,3,4,6,7,8,9];        // every non-boss level
+const ENDLESS_PER_WORLD = ENDLESS_LEVELS.length;
+const ENDLESS_COIN_EVERY = 5, ENDLESS_COIN = 25;
+
+let endless = null;                              // { depth, speed, seed } while running
+
+const ENDLESS_KEY='pe_endless';
+function loadEndless(){
+  try{
+    const e=JSON.parse(localStorage.getItem(ENDLESS_KEY));
+    if(e&&typeof e==='object')
+      return { bestDepth:Math.max(0,e.bestDepth|0), bestScore:Math.max(0,e.bestScore|0) };
+  }catch(err){}
+  return { bestDepth:0, bestScore:0 };
+}
+let endlessRec = loadEndless();
+function saveEndless(){
+  try{ localStorage.setItem(ENDLESS_KEY,JSON.stringify(endlessRec)); }catch(e){}
+}
+
+function endlessSlot(depth){
+  const i=depth-1;
+  return { world: Math.min(TOTAL_WORLDS, 1+Math.floor(i/ENDLESS_PER_WORLD)),
+           level: ENDLESS_LEVELS[i%ENDLESS_PER_WORLD] };
+}
+// Past the last world the pairs stop climbing, so the clock takes over from
+// there. Capped like Boss Rush's — speed compounds harder than anything else.
+function endlessSpeed(depth){ return Math.min(1.35, 1+Math.max(0,depth-12)*0.012); }
+
+function startEndlessRun(){
+  initAC();
+  G.mode='ENDLESS'; G.score=0; G.lives=3; G.seenCuts={};
+  endless={ depth:0, speed:1, seed:Math.floor(Math.random()*1e6) };
+  endlessNextDepth(5.0);
+}
+
+function endlessNextDepth(health){
+  endless.depth++;
+  endless.speed=endlessSpeed(endless.depth);
+  const slot=endlessSlot(endless.depth);
+  G.world=slot.world; G.level=slot.level;
+  secretRun=null; gravMul=1; hasKey=false;
+  hasRay=false; rayCD=0; rayFx=null;
+  tut=null; train=null; dlg=null;
+  // A fresh seed every depth, and a fresh one every run — otherwise the same
+  // eight layouts come round again and the mode is over by the second world
+  levelData = genLevel(slot.world, slot.level, endless.seed + endless.depth*7919);
+  enemies   = spawnEnemies(levelData.enemies);
+  projs=[]; pickups=spawnPowerups(levelData.powerups); hazards=spawnHazards(levelData.hazards);
+  boss=null; parts=[];
+  checkActivated=false; checkpointRespawn=null;
+  cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
+  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  phil.health=Math.max(0.5,Math.min(phil.maxHealth,health));
+  lastSafeGround={...levelData.playerStart};
+  G.screen='PLAYING';
+}
+
+function endlessCleared(){
+  // Health carries between depths — that is what makes it a run rather than a
+  // series of levels — with one heart back as the reward for clearing one
+  const next=Math.min(5.0, phil.health+1.0);
+  lastCoinAward=0;
+  if(endless.depth%ENDLESS_COIN_EVERY===0){
+    // Paid per milestone, never per kill: an infinite level that drops coins is
+    // an infinite coin printer, and the shop is meant to be earned
+    lastCoinAward=addCoins(ENDLESS_COIN);
+  }
+  G.screen='LEVEL_CLEAR'; levelClearTimer=2.2;
+  endless.pendingHealth=next;
+}
+
+function endlessRunOver(){
+  const d=endless.depth, sc=G.score;
+  if(d>endlessRec.bestDepth) endlessRec.bestDepth=d;
+  if(sc>endlessRec.bestScore) endlessRec.bestScore=sc;
+  saveEndless();
+  if(sc>G.highScore){ G.highScore=sc; try{localStorage.setItem('pe_hs',G.highScore);}catch(e){} }
+  if(museumDirty) saveMuseum();
+  endless.finalDepth=d; endless.finalScore=sc;
+  G.screen='ENDLESS_OVER';
+}
+
+function exitEndless(){
+  endless=null;
+  G.mode='CAMPAIGN';
+  titleKeyHeld=true; G.screen='TITLE';
+}
+
 // ── BOSS RUSH RUN ──
 function startRushRun(){
   G.mode='RUSH'; G.score=0; G.lives=3; G.seenCuts={};
@@ -2680,6 +2778,8 @@ function philDie(){
   G.lives--;
   if(G.lives>0){
     setTimeout(()=>{ respawnPhil(); },1800);
+  } else if(endless){
+    setTimeout(()=>{ if(endless) endlessRunOver(); },1800);
   } else {
     setTimeout(()=>{ G.screen='GAME_OVER'; },1800);
   }
@@ -2696,6 +2796,7 @@ function respawnPhil(){
 function levelComplete(){
   addScore(500); SFX.clear();
   if(museumDirty) saveMuseum();
+  if(endless){ endlessCleared(); return; }
   lastCoinAward=addCoins(levelData.isBoss?COIN_BOSS:COIN_LEVEL);
   // Points earned in this level, not the running campaign total — that's the only
   // figure that means anything when you replay a level from the map.
@@ -3151,7 +3252,7 @@ function hitEnemy(e, dmg){
     // No coins from the tutorial — it is replayable, and a drill shouldn't pay
     museumKill(e.type);
     if(train&&train.id==='survive') train.score++;
-    if(!tut&&!train) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
+    if(!tut&&!train&&!endless) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
     if(e.type==='heavy'&&Math.random()<0.5) spawnHealthPickup(e);
   }
 }
@@ -5422,6 +5523,9 @@ function drawHUD(){
   } else if(secretRun){
     ctx.fillStyle='#ffd54a';
     ctx.fillText(`★ SECRET AREA - ${SECRET_META[secretRun.theme].name} ★`,W/2,38);
+  } else if(endless){
+    ctx.fillStyle='#7dffb0';
+    ctx.fillText(`\u221e ENDLESS  -  DEPTH ${endless.depth}  -  ${WORLDS[G.world].name}`,W/2,38);
   } else if(G.mode==='RUSH'){
     const meta=getBossMeta(boss?.type||rush.queue[rush.idx]);
     ctx.fillStyle='#ffbb55';
@@ -6748,6 +6852,141 @@ function drawSecretPicker(){
 }
 
 // ══════════════════════════════════════════════════════
+//  MODES — Boss Rush and Endless
+// ══════════════════════════════════════════════════════
+// One title row for the extra modes, the same move PRACTICE made. The title menu
+// is at nine rows and out of vertical space, and grouping them means the next
+// mode after this one does not need a row of its own either.
+let modeSel=0, modeKeyHeld=false;
+const MODE_ROWS = 3;                             // rush, endless, back
+function modeBox(i){ return { x:W/2-280, y:170+i*74, w:560, h:64 }; }
+
+function openModes(){
+  initAC(); modeSel=0; modeKeyHeld=true;
+  G.screen='MODES'; SFX.pickup();
+}
+function modeActivate(){
+  if(modeSel===0){ startRushRun(); return; }
+  if(modeSel===1){ startEndlessRun(); return; }
+  titleKeyHeld=true; G.screen='TITLE'; SFX.pickup();
+}
+function handleModesInput(){
+  const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
+  const go=keys['Enter']||keys['Space'], back=keys['Escape'];
+  if(up||down||go||back){
+    if(!modeKeyHeld){
+      modeKeyHeld=true;
+      if(back){ titleKeyHeld=true; G.screen='TITLE'; SFX.pickup(); }
+      else if(go) modeActivate();
+      else if(down){ modeSel=(modeSel+1)%MODE_ROWS; SFX.pickup(); }
+      else if(up){ modeSel=(modeSel+MODE_ROWS-1)%MODE_ROWS; SFX.pickup(); }
+    }
+  } else modeKeyHeld=false;
+  if(tapPoint){
+    const first=modeBox(0), last=modeBox(MODE_ROWS-1);
+    if(tapPoint.x>first.x-20&&tapPoint.x<first.x+first.w+20&&
+       tapPoint.y>first.y-14&&tapPoint.y<last.y+last.h+14){
+      let best=0, bestD=Infinity;
+      for(let i=0;i<MODE_ROWS;i++){
+        const b=modeBox(i), d=Math.abs(tapPoint.y-(b.y+b.h/2));
+        if(d<bestD){ bestD=d; best=i; }
+      }
+      modeSel=best; tapPoint=null; modeActivate(); return;
+    }
+    tapPoint=null;
+  }
+}
+function drawModes(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#170f1e'); g.addColorStop(1,'#241833');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#ffbb55'; ctx.shadowBlur=14;
+  ctx.fillStyle='#ffd9a0'; ctx.font='bold 30px monospace';
+  ctx.fillText('EXTRA MODES',W/2,86);
+  ctx.restore();
+  ctx.fillStyle='#8a7f96'; ctx.font='11px monospace';
+  ctx.fillText('The campaign is not the only way to play',W/2,110);
+
+  const rows=[
+    { title:'BOSS RUSH', hue:'#ffbb55',
+      blurb:'All 12 bosses back to back, one run, no levels in between.',
+      stat:rush.best?('BEST SCORE '+rush.best):'Not played yet' },
+    { title:'ENDLESS', hue:'#7dffb0',
+      blurb:'Levels that never stop, getting harder. 3 lives, no boss fights.',
+      stat:endlessRec.bestDepth?('BEST DEPTH '+endlessRec.bestDepth+'   SCORE '+endlessRec.bestScore)
+                               :'Not played yet' },
+    { title:'BACK TO THE TITLE', hue:'#9a9276', blurb:'', stat:'' },
+  ];
+  rows.forEach((r,i)=>{
+    const b=modeBox(i), sel=i===modeSel;
+    ctx.fillStyle=sel?'rgba(120,90,20,0.45)':'rgba(0,0,0,0.32)';
+    ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle=sel?'#ffd54a':'#3f3350'; ctx.lineWidth=sel?3:2;
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+    if(!r.blurb){
+      ctx.fillStyle=sel?'#ffffff':r.hue; ctx.font='bold 16px monospace';
+      ctx.fillText(r.title,W/2,b.y+38);
+    } else {
+      ctx.textAlign='left';
+      ctx.fillStyle=sel?'#ffffff':r.hue; ctx.font='bold 18px monospace';
+      ctx.fillText(r.title,b.x+18,b.y+26);
+      ctx.fillStyle='#9b91ab'; ctx.font='11px monospace';
+      ctx.fillText(r.blurb,b.x+18,b.y+44);
+      ctx.textAlign='right';
+      ctx.fillStyle=sel?'#ffe89a':'#6f6786'; ctx.font='bold 11px monospace';
+      ctx.fillText(r.stat,b.x+b.w-18,b.y+26);
+      ctx.textAlign='center';
+    }
+    if(sel&&Math.sin(frameN*.12)>0){
+      ctx.fillStyle='#ffd54a'; ctx.font='bold 16px monospace';
+      ctx.fillText('>',b.x-16,b.y+38); ctx.fillText('<',b.x+b.w+16,b.y+38);
+    }
+  });
+  ctx.fillStyle='#544c68'; ctx.font='11px monospace';
+  ctx.fillText(isTouchDevice?'Tap a mode':'Arrows/WASD: Select   Enter: Play   Esc: Back',W/2,H-24);
+  ctx.textAlign='left';
+}
+
+function drawEndlessOver(){
+  ctx.fillStyle='rgba(4,10,8,0.9)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.save();
+  ctx.shadowColor='#7dffb0'; ctx.shadowBlur=20;
+  ctx.fillStyle='#7dffb0'; ctx.font='bold 46px monospace';
+  ctx.fillText('RUN OVER',W/2,124);
+  ctx.restore();
+  ctx.fillStyle='#a9c4b4'; ctx.font='15px monospace';
+  ctx.fillText('Phil kept going as long as he could.',W/2,156);
+
+  const newDepth=endless.finalDepth>=endlessRec.bestDepth;
+  const newScore=endless.finalScore>=endlessRec.bestScore;
+  const rows=[
+    ['DEPTH REACHED', String(endless.finalDepth)+(newDepth?'   \u2605 NEW BEST':'')],
+    ['SCORE',         String(endless.finalScore)+(newScore?'   \u2605 NEW BEST':'')],
+    ['BEST DEPTH',    String(endlessRec.bestDepth)],
+  ];
+  rows.forEach((r,i)=>{
+    const y=214+i*44;
+    ctx.fillStyle='rgba(125,255,176,0.08)'; ctx.fillRect(W/2-240,y-26,480,36);
+    ctx.textAlign='left';  ctx.fillStyle='#6f8a7a'; ctx.font='bold 13px monospace';
+    ctx.fillText(r[0],W/2-224,y);
+    ctx.textAlign='right'; ctx.fillStyle='#ffffff'; ctx.font='bold 18px monospace';
+    ctx.fillText(r[1],W/2+224,y);
+  });
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#6f8a7a'; ctx.font='12px monospace';
+  ctx.fillText('Coins earned along the way are yours to keep.',W/2,378);
+  if(Math.sin(frameN*.07)>0){
+    ctx.fillStyle='#ffffff'; ctx.font='bold 16px monospace';
+    ctx.fillText(isTouchDevice?'TAP TO GO BACK':'PRESS ENTER TO GO BACK',W/2,H-40);
+  }
+  ctx.textAlign='left';
+}
+
+// ══════════════════════════════════════════════════════
 //  MUSEUM
 // ══════════════════════════════════════════════════════
 // Every enemy and boss, drawn with the game's own art rather than a portrait —
@@ -7709,7 +7948,7 @@ function titleItems(){
   items.push({ id:'map', label:()=>'WORLD MAP' });
   items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
-  items.push({ id:'rush', label:()=>'BOSS RUSH' });
+  items.push({ id:'modes', label:()=>'EXTRA MODES' });
   items.push({ id:'practice', label:()=>'PRACTICE' });
   items.push({ id:'museum', label:()=>'MUSEUM' });
   items.push({ id:'shop', label:()=>'SHOP  ('+shop.coins+' coins)' });
@@ -7759,8 +7998,8 @@ function titleActivate(){
     startNewCampaign();
   } else if(id==='map'){
     openMap();
-  } else if(id==='rush'){
-    startRushRun();
+  } else if(id==='modes'){
+    openModes();
   } else if(id==='practice'){
     openPractice();
   } else if(id==='museum'){
@@ -7990,7 +8229,16 @@ function drawWin(){
 // Built fresh so the music row shows its current state
 // Keyed by id rather than position: the actions used to be a chain of index
 // comparisons, so inserting a row silently rewired every one below it.
-const pauseItems = ()=> train ? [
+const pauseItems = ()=> endless ? [
+  // The campaign items are actively wrong mid-run: RESTART LEVEL would rebuild
+  // this depth from the fixed campaign seed, and WORLD MAP would launch a
+  // campaign level with the run still live underneath it
+  { id:'resume',      label:'RESUME' },
+  { id:'endlessagain',label:'START THE RUN OVER' },
+  { id:'shop',        label:'SHOP  ('+shop.coins+')' },
+  { id:'music',       label:'MUSIC: '+(musicOn?'ON':'OFF') },
+  { id:'endlessquit', label:'GIVE UP AND GO BACK' },
+] : train ? [
   { id:'resume',    label:'RESUME' },
   { id:'trainretry',label:'START THE DRILL OVER' },
   { id:'music',     label:'MUSIC: '+(musicOn?'ON':'OFF') },
@@ -8042,6 +8290,8 @@ function drawPauseMenu(){
 function pauseActivate(){
   const id=pauseItems()[pauseSelect].id;
   if(id==='resume'){ paused=false; }
+  else if(id==='endlessagain'){ paused=false; startEndlessRun(); }
+  else if(id==='endlessquit'){ paused=false; exitEndless(); }
   else if(id==='trainretry'){ paused=false; startTraining(train.id); }
   else if(id==='trainquit'){ paused=false; exitTraining(); }
   else if(id==='tutstart'){ paused=false; startTutorial(tutReturn); }
@@ -9051,6 +9301,13 @@ function loop(ts){
   if(G.screen==='MAP'){ updateMap(dt); drawMap(); handleMapInput(); return; }
   if(G.screen==='PRACTICE'){ drawPractice(); handlePracticeInput(); return; }
   if(G.screen==='MUSEUM'){ drawMuseum(dt); handleMuseumInput(); return; }
+  if(G.screen==='MODES'){ drawModes(); handleModesInput(); return; }
+  if(G.screen==='ENDLESS_OVER'){
+    drawBackground(); drawPlatforms(); drawDecorations(); drawEndlessOver();
+    updateParts(dt); drawParts();
+    if(In.restart()){ exitEndless(); }
+    return;
+  }
   if(G.screen==='TRAIN_DONE'){
     drawBackground(); drawPlatforms(); drawDecorations(); drawTrainDone();
     if(train.passed&&Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#ffe14d',10,140,0);
@@ -9120,7 +9377,11 @@ function loop(ts){
   if(G.screen==='LEVEL_CLEAR'){
     drawBackground(); drawPlatforms(); drawDecorations(); drawHUD(); drawLevelClear();
     levelClearTimer-=dt;
-    if(levelClearTimer<=0){ if(G.mode==='RUSH') rushNextFight(); else nextLevel(); }
+    if(levelClearTimer<=0){
+      if(G.mode==='RUSH') rushNextFight();
+      else if(endless) endlessNextDepth(endless.pendingHealth);
+      else nextLevel();
+    }
     return;
   }
 
@@ -9164,7 +9425,7 @@ function loop(ts){
 
       updatePlatforms(dt);   // must lead: riders are carried before they move themselves
       updatePhil(dt);
-      updateEnemies(dt);
+      updateEnemies(endless ? dt*endless.speed : dt);
       // Boss Rush difficulty ramp: run the boss on a faster clock as the run goes
       // on. One call site speeds up movement, attack timers and recovery windows
       // for all 12 bosses without touching any individual boss AI.
