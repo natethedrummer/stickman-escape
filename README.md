@@ -167,6 +167,21 @@ each time you clear one, and your best depth and score are kept.
 Coins are paid every fifth depth rather than per kill — otherwise an infinite level would be an
 infinite coin printer.
 
+### 📅 Challenge of the Day
+
+Pick **EXTRA MODES → CHALLENGE OF THE DAY** for one level a day. It is built from today's date, so
+everyone playing on the same day gets exactly the same level — no server, no account, nothing leaves
+your machine. **You get one attempt**, and it counts from the moment the level starts, so the row
+asks you to press again before it begins.
+
+- The week ramps: Monday and Tuesday are Forest, then one world a day up to **Berlin on Sunday**
+- Which level inside that world is a surprise, drawn from the date
+- Finishing under **2:30** pays a time bonus — 12 points per second saved — so speed is what
+  separates two players who both finished
+- 3 lives, no boss fights, no secret doors
+- Finishing pays 40 coins, and every **5 days in a row** pays 60 more
+- Your streak, best streak and best score are kept. Losing, or giving up, ends the streak
+
 ### 🏛️ Museum
 
 Pick **MUSEUM** on the title screen for a gallery of every enemy and boss in the game. Entries
@@ -202,6 +217,7 @@ art, what they do, and how many you have beaten across every run you have ever p
 - Expanded enemy roster with shielded heavies, bomb lobbers, and diving gliders
 - 6 themed worlds with 13 boss fights, all using multi-phase AI
 - Boss Rush mode — all 12 bosses back to back, with a difficulty ramp and unlockable Phil skins
+- Challenge of the Day — one date-generated level a day, the same one for everybody, one attempt
 - Parallax scrolling backgrounds
 - Web Audio API synthesized sound effects (no audio files)
 - Particle system for hits, dust, and deaths

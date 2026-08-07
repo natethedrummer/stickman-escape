@@ -3,6 +3,41 @@
 ## [Unreleased]
 
 ### Added
+- Challenge of the Day — one level a day, under **EXTRA MODES**, generated from today's date rather
+  than from a random number. That one decision is what makes the mode work with no server and no
+  account: two people on the same day get the same level because they computed it, not because
+  something told them. The day of the week picks the world, so the week ramps from Forest on Monday
+  to Berlin on Sunday and the player can learn the rule; the level inside that world comes from the
+  date hash, so which one stays a surprise. Finishing under 2:30 pays a time bonus of 12 points a
+  second, because everybody is playing the same level and completion alone would tie every player on
+  the same number — the clock is the only thing that separates two finished runs. 40 coins for
+  finishing, 60 more every fifth day in a row, and streak, best streak and best score are kept
+  ([#63](https://github.com/natethedrummer/stickman-escape/issues/63))
+- **The attempt is spent when the run starts, not when it ends.** One try is the whole rule of the
+  mode, and if quitting or reloading handed the day back there would be no rule — just a level you
+  can grind until it goes well. Because the cost is that real, the row asks for a second press before
+  it begins, and GIVE UP ON TODAY says plainly what it does
+
+### Changed
+- **EXTRA MODES** rows are keyed by id instead of position. They were a chain of index comparisons,
+  and inserting the daily at the top would have silently rewired every action below it — the same
+  bug the pause menu was rebuilt to avoid
+- The daily's pause menu has no RESTART LEVEL and no WORLD MAP. Restarting would be a second attempt
+  at the one level you get today, and the map would launch a campaign level with the attempt live
+
+### Fixed
+- Secret keys and doors no longer appear in runs that are not the campaign. Leaving through a secret
+  door calls `leaveSecret()` → `nextLevel()`, which advances the campaign — so a door found in an
+  **Endless** run (which has been possible since Endless shipped: all six secret levels are in its
+  rotation) could move the player's saved campaign position from a mode that is supposed to leave it
+  alone. Generation now gates the key and door on `seedOverride==null`, which already meant "not a
+  campaign level"
+- A death schedules Phil's respawn 1.8 seconds out. Giving up on the daily inside that window ended
+  the attempt and wrote the result, and then the timer dropped Phil back into the level — where
+  reaching the flag would overwrite a loss with a win. `respawnPhil` now refuses to resurrect a run
+  that has already ended
+
+### Added
 - Endless mode — levels that keep coming until you run out of lives, under the new **EXTRA MODES**
   row. Depth climbs through the campaign's own world/level pairs rather than pinning one and turning
   a dial, because enemy variety, hazards and moving platforms are all gated on literal world/level

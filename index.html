@@ -1332,7 +1332,11 @@ function genLevel(world, level, seedOverride) {
   // the level so it takes a real climb to reach, and never on a mover — a key
   // sliding away or dropping out from under you reads as a bug, not a puzzle.
   let key=null, door=null;
-  if(hasSecretOn(world,level)){
+  // Campaign only. Leaving through the door calls `leaveSecret` → `nextLevel()`,
+  // which advances the campaign — so a door appearing in a run that isn't the
+  // campaign would quietly move the player's saved position. `seedOverride` is
+  // the one thing that already means "not a campaign level", so it gates this.
+  if(hasSecretOn(world,level) && seedOverride==null){
     const keyCandidates=plats
       .filter(p => p.y<GROUND_Y && p.x>worldW*0.35 && p.x+p.w<flagX-200)
       .sort((a,b) => a.y-b.y);                       // highest platform first
@@ -2319,6 +2323,166 @@ function exitEndless(){
   titleKeyHeld=true; G.screen='TITLE';
 }
 
+// ── CHALLENGE OF THE DAY ──
+// One level a day, the same one for everybody, one attempt. All three of those
+// come from the same place: the level is generated from the date instead of from
+// a random number, so two people on the same day get the same level without a
+// server, a account or a single byte leaving the machine.
+//
+// The week has a shape. The day of the week picks the world, Monday easiest and
+// Sunday hardest, so the challenge ramps and the player can learn the rule. The
+// level *within* that world comes from the date hash, so which one is a surprise.
+const DAILY_COIN = 40;                  // paid once, for finishing
+const DAILY_STREAK_EVERY = 5, DAILY_STREAK_COIN = 60;
+const DAILY_PAR = 150;                  // seconds; finish under it for a time bonus
+const DAILY_PER_SEC = 12;               // points per second saved
+
+let daily = null;                       // { day, world, level, seed, timer } while running
+
+// Local date, not UTC. "Today" has to mean the player's today — a UTC day would
+// roll over mid-evening for anyone west of Greenwich and hand them tomorrow's
+// level while it is still today.
+function dayStamp(d=new Date()){
+  const p=n=>(n<10?'0':'')+n;
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+}
+// Whole days since the epoch. The identity used for "is this yesterday?" — string
+// compares can't answer that across a month or year boundary.
+function dayIndex(stamp){
+  const p=String(stamp).split('-');
+  return Math.floor(Date.UTC(+p[0],+p[1]-1,+p[2])/86400000);
+}
+// FNV-1a over the date string. Any hash would do; this one just has to spread
+// neighbouring dates apart, or a whole week runs the same layout.
+function dayHash(stamp){
+  let h=0x811c9dc5;
+  for(let i=0;i<stamp.length;i++){ h^=stamp.charCodeAt(i); h=Math.imul(h,0x01000193); }
+  return h|0;
+}
+
+function dailySlot(stamp){
+  const h=dayHash(stamp);
+  const dow=(dayIndex(stamp)+3)%7;                       // epoch day 0 was a Thursday → 0 = Monday
+  return { world: 1+Math.floor(dow*TOTAL_WORLDS/7),      // Mon-Tue w1, then one world a day to Sunday w6
+           level: ENDLESS_LEVELS[Math.abs(h)%ENDLESS_PER_WORLD],
+           seed:  h };
+}
+
+const DAILY_KEY='pe_daily';
+function loadDaily(){
+  try{
+    const d=JSON.parse(localStorage.getItem(DAILY_KEY));
+    if(d&&typeof d==='object') return {
+      day:        typeof d.day==='string'?d.day:'',
+      lastWin:    typeof d.lastWin==='string'?d.lastWin:'',
+      done:       !!d.done, won: !!d.won,
+      score:      Math.max(0,d.score|0),
+      time:       Math.max(0,+d.time||0),
+      streak:     Math.max(0,d.streak|0),
+      bestStreak: Math.max(0,d.bestStreak|0),
+      bestScore:  Math.max(0,d.bestScore|0),
+      wins:       Math.max(0,d.wins|0),
+    };
+  }catch(err){}
+  return { day:'', lastWin:'', done:false, won:false, score:0, time:0,
+           streak:0, bestStreak:0, bestScore:0, wins:0 };
+}
+let dailyRec = loadDaily();
+function saveDaily(){ try{ localStorage.setItem(DAILY_KEY,JSON.stringify(dailyRec)); }catch(e){} }
+
+function dailyPlayedToday(){ return dailyRec.done && dailyRec.day===dayStamp(); }
+// A streak only survives if the last win was literally yesterday. Shown as still
+// alive on the day after a win, because today's attempt hasn't happened yet.
+function dailyStreakLive(){
+  if(!dailyRec.streak||!dailyRec.lastWin) return 0;
+  const gap=dayIndex(dayStamp())-dayIndex(dailyRec.lastWin);
+  return gap<=1 ? dailyRec.streak : 0;
+}
+function dailyTimeBonus(sec){ return Math.max(0, Math.round((DAILY_PAR-sec)*DAILY_PER_SEC)); }
+function fmtClock(sec){
+  const s=Math.max(0,Math.floor(sec));
+  return Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60);
+}
+
+function startDailyRun(){
+  initAC();
+  const stamp=dayStamp(), slot=dailySlot(stamp);
+  G.mode='DAILY'; G.score=0; G.lives=3; G.seenCuts={};
+  daily={ day:stamp, world:slot.world, level:slot.level, seed:slot.seed,
+          timer:0, over:false, bonus:0, streakCoin:0 };
+  // The attempt is spent the moment it begins, not when it ends. One try is the
+  // entire rule of the mode, and if quitting or reloading handed the day back
+  // there would be no rule — just a level you can grind until it goes well.
+  dailyRec.day=stamp; dailyRec.done=true; dailyRec.won=false;
+  dailyRec.score=0; dailyRec.time=0;
+  saveDaily();
+
+  G.world=daily.world; G.level=daily.level;
+  secretRun=null; gravMul=1; hasKey=false;
+  hasRay=false; rayCD=0; rayFx=null;
+  tut=null; train=null; dlg=null;
+  levelData = genLevel(daily.world, daily.level, daily.seed);
+  enemies   = spawnEnemies(levelData.enemies);
+  projs=[]; pickups=spawnPowerups(levelData.powerups); hazards=spawnHazards(levelData.hazards);
+  boss=null; parts=[];
+  checkActivated=false; checkpointRespawn=null;
+  cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
+  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  lastSafeGround={...levelData.playerStart};
+  G.screen='PLAYING';
+}
+
+function dailyCleared(){
+  daily.over=true;
+  // Everybody plays the same level, so completion alone would tie every player on
+  // the same number. The clock is what separates two finished runs.
+  daily.bonus=dailyTimeBonus(daily.timer);
+  if(daily.bonus>0){
+    addScore(daily.bonus);
+    scorePopup(phil.x+phil.w/2,phil.y-30,'TIME BONUS','#7dffb0');
+  }
+  lastCoinAward=addCoins(DAILY_COIN);
+  dailyFinish(true);
+  SFX.win();
+  G.screen='DAILY_OVER';
+}
+
+function dailyRunOver(){
+  if(!daily||daily.over) return;
+  daily.over=true;
+  dailyFinish(false);
+  G.screen='DAILY_OVER';
+}
+
+function dailyFinish(won){
+  dailyRec.day=daily.day; dailyRec.done=true; dailyRec.won=won;
+  dailyRec.score=G.score; dailyRec.time=daily.timer;
+  if(won){
+    dailyRec.wins++;
+    const last=dailyRec.lastWin?dayIndex(dailyRec.lastWin):-9e9;
+    dailyRec.streak = (dayIndex(daily.day)-last===1) ? dailyRec.streak+1 : 1;
+    dailyRec.lastWin=daily.day;
+    if(dailyRec.streak>dailyRec.bestStreak) dailyRec.bestStreak=dailyRec.streak;
+    if(dailyRec.streak%DAILY_STREAK_EVERY===0) daily.streakCoin=addCoins(DAILY_STREAK_COIN);
+  } else {
+    dailyRec.streak=0;              // the streak counts days finished, so losing ends it
+  }
+  if(G.score>dailyRec.bestScore) dailyRec.bestScore=G.score;
+  if(G.score>G.highScore){ G.highScore=G.score; try{localStorage.setItem('pe_hs',G.highScore);}catch(e){} }
+  if(museumDirty) saveMuseum();
+  saveDaily();
+}
+
+function exitDaily(){
+  daily=null;
+  G.mode='CAMPAIGN';
+  // A touch sets both `touches.start` (which got us here) and `tapPoint`, so
+  // without clearing it the same tap lands again on the modes row underneath —
+  // the touch version of the held-key bleed the menus already guard against.
+  tapPoint=null;
+  modeKeyHeld=true; modeSel=0; modeArm=0; modeMsg=null; G.screen='MODES';
+}
+
 // ── BOSS RUSH RUN ──
 function startRushRun(){
   G.mode='RUSH'; G.score=0; G.lives=3; G.seenCuts={};
@@ -2780,12 +2944,18 @@ function philDie(){
     setTimeout(()=>{ respawnPhil(); },1800);
   } else if(endless){
     setTimeout(()=>{ if(endless) endlessRunOver(); },1800);
+  } else if(daily){
+    setTimeout(()=>{ if(daily) dailyRunOver(); },1800);
   } else {
     setTimeout(()=>{ G.screen='GAME_OVER'; },1800);
   }
 }
 
 function respawnPhil(){
+  // A death schedules this 1.8s out. GIVE UP ON TODAY inside that window ends the
+  // attempt first, and the timer would then drop Phil back into a level whose
+  // result is already written — where finishing would overwrite it with a win.
+  if(daily&&daily.over) return;
   const sp=checkpointRespawn||levelData.playerStart;
   resetFallenPlatforms();
   initPhil(sp.x,sp.y);
@@ -2797,6 +2967,7 @@ function levelComplete(){
   addScore(500); SFX.clear();
   if(museumDirty) saveMuseum();
   if(endless){ endlessCleared(); return; }
+  if(daily){ dailyCleared(); return; }
   lastCoinAward=addCoins(levelData.isBoss?COIN_BOSS:COIN_LEVEL);
   // Points earned in this level, not the running campaign total — that's the only
   // figure that means anything when you replay a level from the map.
@@ -5526,6 +5697,10 @@ function drawHUD(){
   } else if(endless){
     ctx.fillStyle='#7dffb0';
     ctx.fillText(`\u221e ENDLESS  -  DEPTH ${endless.depth}  -  ${WORLDS[G.world].name}`,W/2,38);
+  } else if(daily){
+    // The clock is on screen because it is worth points, not for flavour
+    ctx.fillStyle='#ffd54a';
+    ctx.fillText(`\u2605 CHALLENGE OF THE DAY  -  ${WORLDS[G.world].name}  -  ${fmtClock(daily.timer)}`,W/2,38);
   } else if(G.mode==='RUSH'){
     const meta=getBossMeta(boss?.type||rush.queue[rush.idx]);
     ctx.fillStyle='#ffbb55';
@@ -6858,19 +7033,65 @@ function drawSecretPicker(){
 // is at nine rows and out of vertical space, and grouping them means the next
 // mode after this one does not need a row of its own either.
 let modeSel=0, modeKeyHeld=false;
-const MODE_ROWS = 3;                             // rush, endless, back
-function modeBox(i){ return { x:W/2-280, y:170+i*74, w:560, h:64 }; }
+let modeMsg=null;                                // { text, t } — a line under the rows
+let modeArm=0;                                   // seconds left on the daily's "press again"
+// Four rows at a 74px pitch: the last one's box ends at y 456, clear of the hint
+// at H-24. A fifth row would not fit and would need the pitch reworked.
+function modeBox(i){ return { x:W/2-280, y:148+i*74, w:560, h:64 }; }
+
+// Keyed by id, not position. The rows used to be a chain of index comparisons,
+// and inserting one at the top would have rewired every action below it.
+function modeRows(){
+  const streak=dailyStreakLive();
+  const playedToday=dailyPlayedToday();
+  let dailyStat;
+  if(playedToday) dailyStat=(dailyRec.won?'TODAY: DONE  '+dailyRec.score:'TODAY: NO LUCK');
+  else dailyStat='TODAY: NOT PLAYED YET';
+  if(streak>0) dailyStat+='   STREAK '+streak;
+  return [
+    { id:'daily', title:'CHALLENGE OF THE DAY', hue:'#ffd54a',
+      blurb: playedToday ? 'Done for today. A brand new one arrives tomorrow.'
+                         : 'One level, the same one for everyone. You get one try.',
+      stat: dailyStat },
+    { id:'rush', title:'BOSS RUSH', hue:'#ffbb55',
+      blurb:'All 12 bosses back to back, one run, no levels in between.',
+      stat:rush.best?('BEST SCORE '+rush.best):'Not played yet' },
+    { id:'endless', title:'ENDLESS', hue:'#7dffb0',
+      blurb:'Levels that never stop, getting harder. 3 lives, no boss fights.',
+      stat:endlessRec.bestDepth?('BEST DEPTH '+endlessRec.bestDepth+'   SCORE '+endlessRec.bestScore)
+                               :'Not played yet' },
+    { id:'back', title:'BACK TO THE TITLE', hue:'#9a9276', blurb:'', stat:'' },
+  ];
+}
+const MODE_ROWS = 4;
 
 function openModes(){
-  initAC(); modeSel=0; modeKeyHeld=true;
+  initAC(); modeSel=0; modeKeyHeld=true; modeMsg=null; modeArm=0;
   G.screen='MODES'; SFX.pickup();
 }
 function modeActivate(){
-  if(modeSel===0){ startRushRun(); return; }
-  if(modeSel===1){ startEndlessRun(); return; }
+  const id=modeRows()[modeSel].id;
+  if(id==='rush'){ startRushRun(); return; }
+  if(id==='endless'){ startEndlessRun(); return; }
+  if(id==='daily'){
+    if(dailyPlayedToday()){
+      modeMsg={ text:"You have had your go today. Come back tomorrow!", t:3.0 };
+      SFX.broke(); return;
+    }
+    // Two presses to start. The attempt is spent the instant the run begins, so
+    // one stray Enter on this row must not be able to burn the whole day.
+    if(modeArm<=0){
+      modeArm=4.0;
+      modeMsg={ text:'ONE TRY ONLY — press again to start today’s challenge', t:4.0 };
+      SFX.pickup(); return;
+    }
+    modeArm=0; modeMsg=null; startDailyRun(); return;
+  }
   titleKeyHeld=true; G.screen='TITLE'; SFX.pickup();
 }
-function handleModesInput(){
+function handleModesInput(dt){
+  if(modeArm>0){ modeArm-=dt; if(modeArm<=0) modeArm=0; }
+  if(modeMsg){ modeMsg.t-=dt; if(modeMsg.t<=0) modeMsg=null; }
   const up=keys['ArrowUp']||keys['KeyW'], down=keys['ArrowDown']||keys['KeyS'];
   const go=keys['Enter']||keys['Space'], back=keys['Escape'];
   if(up||down||go||back){
@@ -6878,8 +7099,10 @@ function handleModesInput(){
       modeKeyHeld=true;
       if(back){ titleKeyHeld=true; G.screen='TITLE'; SFX.pickup(); }
       else if(go) modeActivate();
-      else if(down){ modeSel=(modeSel+1)%MODE_ROWS; SFX.pickup(); }
-      else if(up){ modeSel=(modeSel+MODE_ROWS-1)%MODE_ROWS; SFX.pickup(); }
+      // Moving off the row cancels the arm, so it can never fire from a row the
+      // player has since left
+      else if(down){ modeSel=(modeSel+1)%MODE_ROWS; modeArm=0; SFX.pickup(); }
+      else if(up){ modeSel=(modeSel+MODE_ROWS-1)%MODE_ROWS; modeArm=0; SFX.pickup(); }
     }
   } else modeKeyHeld=false;
   if(tapPoint){
@@ -6904,26 +7127,18 @@ function drawModes(){
   ctx.save();
   ctx.shadowColor='#ffbb55'; ctx.shadowBlur=14;
   ctx.fillStyle='#ffd9a0'; ctx.font='bold 30px monospace';
-  ctx.fillText('EXTRA MODES',W/2,86);
+  ctx.fillText('EXTRA MODES',W/2,74);
   ctx.restore();
   ctx.fillStyle='#8a7f96'; ctx.font='11px monospace';
-  ctx.fillText('The campaign is not the only way to play',W/2,110);
+  ctx.fillText('The campaign is not the only way to play',W/2,98);
 
-  const rows=[
-    { title:'BOSS RUSH', hue:'#ffbb55',
-      blurb:'All 12 bosses back to back, one run, no levels in between.',
-      stat:rush.best?('BEST SCORE '+rush.best):'Not played yet' },
-    { title:'ENDLESS', hue:'#7dffb0',
-      blurb:'Levels that never stop, getting harder. 3 lives, no boss fights.',
-      stat:endlessRec.bestDepth?('BEST DEPTH '+endlessRec.bestDepth+'   SCORE '+endlessRec.bestScore)
-                               :'Not played yet' },
-    { title:'BACK TO THE TITLE', hue:'#9a9276', blurb:'', stat:'' },
-  ];
+  const rows=modeRows();
   rows.forEach((r,i)=>{
     const b=modeBox(i), sel=i===modeSel;
+    const armed=r.id==='daily'&&modeArm>0;
     ctx.fillStyle=sel?'rgba(120,90,20,0.45)':'rgba(0,0,0,0.32)';
     ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.strokeStyle=sel?'#ffd54a':'#3f3350'; ctx.lineWidth=sel?3:2;
+    ctx.strokeStyle=armed?'#ffffff':(sel?'#ffd54a':'#3f3350'); ctx.lineWidth=sel?3:2;
     ctx.strokeRect(b.x,b.y,b.w,b.h);
     if(!r.blurb){
       ctx.fillStyle=sel?'#ffffff':r.hue; ctx.font='bold 16px monospace';
@@ -6944,8 +7159,59 @@ function drawModes(){
       ctx.fillText('>',b.x-16,b.y+38); ctx.fillText('<',b.x+b.w+16,b.y+38);
     }
   });
+  if(modeMsg){
+    ctx.fillStyle=modeArm>0?'#ffd54a':'#ff8877'; ctx.font='bold 13px monospace';
+    ctx.fillText(modeMsg.text,W/2,H-52);
+  }
   ctx.fillStyle='#544c68'; ctx.font='11px monospace';
   ctx.fillText(isTouchDevice?'Tap a mode':'Arrows/WASD: Select   Enter: Play   Esc: Back',W/2,H-24);
+  ctx.textAlign='left';
+}
+
+// ── CHALLENGE OF THE DAY — RESULTS ──
+function drawDailyOver(){
+  ctx.fillStyle='rgba(10,8,2,0.9)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  const won=dailyRec.won;
+  ctx.save();
+  ctx.shadowColor=won?'#ffd54a':'#ff6644'; ctx.shadowBlur=20;
+  ctx.fillStyle=won?'#ffd54a':'#ff8877'; ctx.font='bold 42px monospace';
+  ctx.fillText(won?'CHALLENGE BEATEN':'NOT TODAY',W/2,110);
+  ctx.restore();
+  ctx.fillStyle='#c4b48a'; ctx.font='14px monospace';
+  ctx.fillText(won?'That was '+daily.day+' — everybody got that same level.'
+                  :'That was your one try. A new level arrives tomorrow.',W/2,140);
+
+  const rows=[['SCORE', String(G.score)+(G.score>=dailyRec.bestScore?'   ★ BEST EVER':'')],
+              ['TIME',  fmtClock(daily.timer)]];
+  if(won) rows.push(['TIME BONUS', daily.bonus>0?'+'+daily.bonus:'none — over '+DAILY_PAR+'s']);
+  rows.push(['STREAK', won?(dailyRec.streak+' day'+(dailyRec.streak===1?'':'s')+' in a row')
+                          :'back to zero']);
+  rows.push(['BEST STREAK', String(dailyRec.bestStreak)]);
+  rows.forEach((r,i)=>{
+    const y=196+i*40;
+    ctx.fillStyle='rgba(255,213,74,0.08)'; ctx.fillRect(W/2-240,y-24,480,32);
+    ctx.textAlign='left';  ctx.fillStyle='#8a8256'; ctx.font='bold 13px monospace';
+    ctx.fillText(r[0],W/2-224,y);
+    ctx.textAlign='right'; ctx.fillStyle='#ffffff'; ctx.font='bold 17px monospace';
+    ctx.fillText(r[1],W/2+224,y);
+  });
+
+  ctx.textAlign='center';
+  if(daily.streakCoin>0){
+    ctx.fillStyle='#ffd700'; ctx.font='bold 15px monospace';
+    ctx.fillText('★ '+DAILY_STREAK_EVERY+'-DAY STREAK — +'+daily.streakCoin+' BONUS COINS ★',W/2,H-84);
+  } else if(won){
+    ctx.fillStyle='#8a8256'; ctx.font='12px monospace';
+    ctx.fillText('+'+DAILY_COIN+' coins.  Finish '+DAILY_STREAK_EVERY+' days in a row for a big bonus.',W/2,H-84);
+  } else {
+    ctx.fillStyle='#8a8256'; ctx.font='12px monospace';
+    ctx.fillText('Coins you picked up along the way are still yours.',W/2,H-84);
+  }
+  if(Math.sin(frameN*.07)>0){
+    ctx.fillStyle='#ffffff'; ctx.font='bold 16px monospace';
+    ctx.fillText(isTouchDevice?'TAP TO GO BACK':'PRESS ENTER TO GO BACK',W/2,H-40);
+  }
   ctx.textAlign='left';
 }
 
@@ -8229,7 +8495,15 @@ function drawWin(){
 // Built fresh so the music row shows its current state
 // Keyed by id rather than position: the actions used to be a chain of index
 // comparisons, so inserting a row silently rewired every one below it.
-const pauseItems = ()=> endless ? [
+const pauseItems = ()=> daily ? [
+  // No RESTART LEVEL here, deliberately. It would be a second attempt at the one
+  // level you get today, which is the one thing the mode does not allow — and the
+  // world map would launch a campaign level with the attempt still live.
+  { id:'resume',    label:'RESUME' },
+  { id:'shop',      label:'SHOP  ('+shop.coins+')' },
+  { id:'music',     label:'MUSIC: '+(musicOn?'ON':'OFF') },
+  { id:'dailyquit', label:'GIVE UP ON TODAY' },
+] : endless ? [
   // The campaign items are actively wrong mid-run: RESTART LEVEL would rebuild
   // this depth from the fixed campaign seed, and WORLD MAP would launch a
   // campaign level with the run still live underneath it
@@ -8292,6 +8566,8 @@ function pauseActivate(){
   if(id==='resume'){ paused=false; }
   else if(id==='endlessagain'){ paused=false; startEndlessRun(); }
   else if(id==='endlessquit'){ paused=false; exitEndless(); }
+  // Giving up spends the attempt. It already was spent — the run started.
+  else if(id==='dailyquit'){ paused=false; dailyRunOver(); }
   else if(id==='trainretry'){ paused=false; startTraining(train.id); }
   else if(id==='trainquit'){ paused=false; exitTraining(); }
   else if(id==='tutstart'){ paused=false; startTutorial(tutReturn); }
@@ -9301,7 +9577,14 @@ function loop(ts){
   if(G.screen==='MAP'){ updateMap(dt); drawMap(); handleMapInput(); return; }
   if(G.screen==='PRACTICE'){ drawPractice(); handlePracticeInput(); return; }
   if(G.screen==='MUSEUM'){ drawMuseum(dt); handleMuseumInput(); return; }
-  if(G.screen==='MODES'){ drawModes(); handleModesInput(); return; }
+  if(G.screen==='MODES'){ drawModes(); handleModesInput(dt); return; }
+  if(G.screen==='DAILY_OVER'){
+    drawBackground(); drawPlatforms(); drawDecorations(); drawDailyOver();
+    if(dailyRec.won&&Math.random()<.03) burst(Math.random()*W,Math.random()*H*.6,'#ffd54a',10,140,0);
+    updateParts(dt); drawParts();
+    if(In.restart()){ exitDaily(); }
+    return;
+  }
   if(G.screen==='ENDLESS_OVER'){
     drawBackground(); drawPlatforms(); drawDecorations(); drawEndlessOver();
     updateParts(dt); drawParts();
@@ -9422,6 +9705,11 @@ function loop(ts){
         if(tapPoint.x>=b.x-10&&tapPoint.x<=b.x+b.w+10&&tapPoint.y>=b.y-10&&tapPoint.y<=b.y+b.h+10) cycleWeapon(1);
         tapPoint=null;
       }
+
+      // Runs here rather than in the frame's outer block so a pause, the shop and
+      // a dialogue box all stop the clock — the bonus should measure playing, not
+      // sitting on a menu
+      if(daily&&!daily.over&&!phil.dead) daily.timer+=dt;
 
       updatePlatforms(dt);   // must lead: riders are carried before they move themselves
       updatePhil(dt);
