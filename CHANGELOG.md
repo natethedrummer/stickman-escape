@@ -3,6 +3,42 @@
 ## [Unreleased]
 
 ### Added
+- Pets — a fourth slot in the shop, and the first thing you buy that is a creature in the world
+  rather than something Phil wears. Each one does exactly one job and nothing else, which is what
+  keeps three of them apart in a player's head: **Pip** (200) is a bird that doubles the coins from
+  every kill, **Rex** (400) is a dog that bites anything that gets near Phil for 1, once a second,
+  and **Bolt** (600) is a floating thing that eats one whole hit and then rests 12 seconds. None of
+  them can be aimed or told what to do — they follow, and that is the whole interface
+  ([#64](https://github.com/natethedrummer/stickman-escape/issues/64))
+- The pet floats and is positioned relative to Phil every frame rather than being an entity with
+  velocity and platform collision. Three separate "thing vanishes forever" bugs in this game have
+  come from `moveCollide` ejecting something out of a platform, and a pet has no gameplay reason to
+  collide with anything: it cannot be stood on, blocked by a wall, or lost down a pit
+- **Rex cannot bite through a Heavy's front guard**, and a blocked bite still costs him the
+  cooldown. Breaking that guard is the only reason the hammer exists, and a dog that chewed through
+  it would take the hammer's one job away. He also measures from *Phil*, not from himself — he
+  trails behind, so a radius around the dog reaches everything except the thing Phil is facing
+- **Bolt is spent before the magic shield's charges.** Bolt comes back on its own after a rest and
+  charges only come back on a respawn, so the renewable one goes first — which is what a player
+  would do if you asked them. The star still beats both
+- Bolt's rest shows as a bar in the HUD. Without it the one thing Bolt does is invisible: you would
+  only find out it was asleep by taking the hit it was supposed to eat
+- Drills and the tutorial ignore pets entirely. Rex would win the survival drill on his own and Bolt
+  would eat the hits the shield drill counts — the same reasoning that already forces the plain wood
+  shield in the shield drill
+
+### Changed
+- The HUD's top row lays itself out with a cursor instead of hard-coded x positions. The score
+  carried a `charges ? 245 : 200`, and adding Bolt's bar to that pair of magic numbers drew it
+  straight through the score text. With nothing equipped every element lands exactly where it always
+  did; each optional one now pushes the rest along, so a five-figure score with charges *and* Bolt
+  can no longer collide with LIVES
+- Shop tabs are a table keyed by name rather than a chain of ternaries, and the tab strip derives its
+  width from the tab count. At three tabs that reproduces the old layout exactly; a fourth at the old
+  fixed spacing ran 29px off the right edge of the canvas
+- Shop saves written before pets existed load with no pet owned and none following, unchanged
+
+### Added
 - Challenge of the Day — one level a day, under **EXTRA MODES**, generated from today's date rather
   than from a random number. That one decision is what makes the mode work with no server and no
   account: two people on the same day get the same level because they computed it, not because

@@ -1737,6 +1737,36 @@ function curShield(){
   return SHIELDS[shop.shield]||SHIELDS.wood;
 }
 
+// ── PETS ──
+// A fourth slot, and the first one that is a *thing in the world* rather than
+// something Phil wears. Each pet does exactly one job and nothing else, which is
+// what keeps three of them distinguishable to an eight-year-old: one finds money,
+// one fights, one takes a hit. None of them can be aimed or told what to do.
+const PETS = {
+  none: { name:'NO PET', price:0, color:'#8a94a2',
+    blurb:'Phil goes it alone.',
+    stats:['Nothing follows you'] },
+  pip:  { name:'PIP', price:200, color:'#7fd0ff', kind:'finder', coinMul:2,
+    blurb:'A little bird with an eye for gold.',
+    stats:['Double coins from every kill','Never fights','Pays for itself'] },
+  rex:  { name:'REX', price:400, color:'#d8a05a', kind:'guard', dmg:1, reach:92, cd:1.0,
+    blurb:'A scruffy dog that bites.',
+    stats:['Bites enemies that come close','Damage 1, once a second','No good vs a Heavy guard'] },
+  bolt: { name:'BOLT', price:600, color:'#ccaaff', kind:'guardian', rest:12,
+    blurb:'Jumps in front of one hit. Then rests.',
+    stats:['Eats one whole hit for Phil','Rests 12 seconds after','Comes back when you respawn'] },
+};
+const PET_ORDER = ['none','pip','rex','bolt'];
+
+// Drills and the tutorial measure Phil, not what is following him — Rex would win
+// the survival drill on his own and Bolt would eat the hits the shield drill counts.
+// Same reasoning as curShield()'s wood-shield override.
+function curPet(){
+  if(tut||train) return PETS.none;
+  return PETS[shop.pet]||PETS.none;
+}
+function petCoinMul(){ return curPet().coinMul||1; }
+
 const SHOP_KEY = 'pe_shop';
 function loadShop(){
   try{
@@ -1751,20 +1781,27 @@ function loadShop(){
       const shields=new Set((s.shields||[]).filter(x=>SHIELDS[x]));
       shields.add('wood');                       // he never loses the first one
       const sh=SHIELDS[s.shield]&&shields.has(s.shield)?s.shield:'wood';
+      // Saves written before pets existed have no `pets` at all and load as
+      // nobody following Phil, which is exactly right
+      const pets=new Set((s.pets||[]).filter(p=>PETS[p]));
+      pets.add('none');                          // going alone is always an option
+      const pt=PETS[s.pet]&&pets.has(s.pet)?s.pet:'none';
       return { coins:Math.max(0,s.coins|0), owned, equipped:eq, cloaks, cloak:cl,
-               shields, shield:sh };
+               shields, shield:sh, pets, pet:pt };
     }
   }catch(e){}
   return { coins:0, owned:new Set(['sword']), equipped:'sword',
            cloaks:new Set(['none']), cloak:'none',
-           shields:new Set(['wood']), shield:'wood' };
+           shields:new Set(['wood']), shield:'wood',
+           pets:new Set(['none']), pet:'none' };
 }
 let shop = loadShop();
 function saveShop(){
   try{ localStorage.setItem(SHOP_KEY,JSON.stringify({
     coins:shop.coins, owned:[...shop.owned], equipped:shop.equipped,
     cloaks:[...shop.cloaks], cloak:shop.cloak,
-    shields:[...shop.shields], shield:shop.shield })); }catch(e){}
+    shields:[...shop.shields], shield:shop.shield,
+    pets:[...shop.pets], pet:shop.pet })); }catch(e){}
 }
 // The gi takes the weapon slot over rather than sitting beside it. Wearing it
 // means giving up the bazooka, which is the whole point of it costing 600.
@@ -1797,6 +1834,12 @@ function equipShield(id){
 function equipCloak(id){
   if(!CLOAKS[id]||!shop.cloaks.has(id)) return;
   shop.cloak=id; saveShop();
+}
+
+function equipPet(id){
+  if(!PETS[id]||!shop.pets.has(id)) return;
+  shop.pet=id; saveShop();
+  if(phil) initPet();          // swap mid-level and the new one is there at once
 }
 
 // Grounded punches are quick and cheap; the flying kick is the reward for
@@ -1840,6 +1883,104 @@ function initPhil(sx,sy){
     ammo:WEAPONS.bazooka.ammoMax, boomOut:false, fireFx:0,
     // Magic charges refill on every respawn, same as rockets do
     shieldCharges:(SHIELDS[shop.shield]||SHIELDS.wood).charges||0, shieldFx:0 };
+  // Rebuilt with Phil, so Bolt's rest is handed back by a death for free — the
+  // same trick the rockets and the magic charges use
+  initPet();
+}
+
+// ── PET ──
+// It floats and is positioned relative to Phil every frame rather than being an
+// entity with velocity and platform collision. That is deliberate: three separate
+// "thing vanishes forever" bugs in this game have come from moveCollide ejecting
+// something out of a platform, and a pet has no gameplay reason to collide with
+// anything. It cannot be stood on, blocked by a wall, or lost down a pit.
+let pet = null;
+
+function initPet(){
+  const def=curPet();
+  if(!def.kind){ pet=null; return; }
+  const a=petAnchor(def);
+  pet={ id:shop.pet, kind:def.kind, x:a.x, y:a.y, bob:Math.random()*6.28,
+        cd:0, rest:0, biteFx:0, facingR:true };
+}
+
+// Trails behind Phil, on the side he is not facing, so it never covers the thing
+// he is about to hit. Rex runs along at his heels; the flyers sit above.
+function petAnchor(def){
+  const back=phil.facingR?-1:1;
+  return def.kind==='guard'
+    ? { x:phil.x+phil.w/2+back*42, y:phil.y+phil.h-15 }
+    : { x:phil.x+phil.w/2+back*36, y:phil.y-14 };
+}
+
+function updatePet(dt){
+  if(!phil) return;
+  const def=curPet();
+  if(!def.kind){ pet=null; return; }
+  // Rebuilt on any mismatch rather than trusting every caller to have done it.
+  // `initPet` runs inside `initPhil`, which is the wrong hook for a pet bought or
+  // swapped from the pause menu's shop mid-level — Phil is not rebuilt there.
+  if(!pet||pet.id!==shop.pet) initPet();
+  if(!pet) return;
+  pet.bob+=dt*6;
+  if(pet.cd>0) pet.cd-=dt;
+  if(pet.rest>0) pet.rest-=dt;
+  if(pet.biteFx>0) pet.biteFx-=dt;
+
+  const a=petAnchor(def);
+  // Checkpoint respawns and the safe-ground teleport move Phil across the level
+  // without rebuilding him, and a pet easing after him would swim the whole way.
+  // One distance test covers every teleport without hooking any of them.
+  if(Math.hypot(a.x-pet.x,a.y-pet.y)>400){ pet.x=a.x; pet.y=a.y; }
+  else {
+    const k=Math.min(1,dt*7);
+    pet.x+=(a.x-pet.x)*k;
+    pet.y+=(a.y-pet.y)*k;
+  }
+  pet.facingR=phil.facingR;
+  if(phil.dead) return;
+
+  if(def.kind==='guard'&&pet.cd<=0){
+    // Measured from Phil, not from Rex. Rex trails *behind* Phil, so a radius
+    // around the dog reaches everything except the thing Phil is actually facing
+    // — he could only ever bite what was already past him.
+    const px=phil.x+phil.w/2, py=phil.y+phil.h/2;
+    for(const e of enemies){
+      if(e.dead) continue;
+      const ex=e.x+e.w/2, ey=e.y+e.h/2;
+      if(Math.hypot(ex-px,ey-py)>def.reach) continue;
+      // The Heavy's front guard stays the hammer's problem to solve. A dog that
+      // chewed through it would take the only reason to buy the hammer.
+      if(isHeavyFrontGuarding(e)){
+        burst(ex,ey,'#88ccff',5,60,0); SFX.block();
+        pet.cd=def.cd; pet.biteFx=0.22;
+        break;
+      }
+      hitEnemy(e,def.dmg);
+      pet.cd=def.cd; pet.biteFx=0.22;
+      // Snap him onto the target. The follow ease pulls him home over the next
+      // few frames on its own, which is what makes it read as a lunge and return
+      // rather than a bite happening 80px away from the dog.
+      pet.x=ex-(phil.facingR?16:-16); pet.y=ey;
+      SFX.atk();
+      break;                       // one bite a cooldown, not one per enemy
+    }
+  }
+}
+
+// Bolt is spent before the magic shield's charges, not after: Bolt comes back on
+// its own after a rest, and charges only come back on a respawn. Burning the
+// renewable one first is what a player would do if asked.
+function petAbsorbsHit(){
+  const def=curPet();
+  return def.kind==='guardian' && pet && pet.rest<=0;
+}
+function petTakeHitFor(hx,hy){
+  const def=curPet();
+  pet.rest=def.rest;
+  burst(hx,hy,def.color,16,140,0);
+  scorePopup(hx,hy-18,'BOLT TOOK IT',def.color);
+  SFX.block();
 }
 
 function spawnEnemies(defs){
@@ -2884,6 +3025,19 @@ function philTakeDmg(amt, opts={}){
   // can be absorbed too: the respawnToSafe teleport below runs either way, so
   // Phil is still lifted out of the gap rather than left in it.
   const immune = phil.starT>0;
+  if(!immune && petAbsorbsHit()){
+    petTakeHitFor(hitX,hitY);
+    if(setInv) phil.invTimer=INV_DUR;
+    if(respawnToSafe){
+      // Same as the magic charge below: absorbed or not, Phil still has to be
+      // lifted out of the pit, or the absorb leaves him in the gap to fall out
+      const sp=lastSafeGround||checkpointRespawn||levelData.playerStart;
+      phil.x=sp.x; phil.y=sp.y; phil.vx=0; phil.vy=0;
+      phil.onGround=false; phil.wasOnGround=false;
+      lastSafeGround={x:sp.x,y:sp.y};
+    }
+    return false;
+  }
   if(!immune && phil.shieldCharges>0){
     phil.shieldCharges--; phil.shieldFx=0.45;
     burst(hitX,hitY,SHIELDS.magic.color,14,130,0);
@@ -3423,7 +3577,8 @@ function hitEnemy(e, dmg){
     // No coins from the tutorial — it is replayable, and a drill shouldn't pay
     museumKill(e.type);
     if(train&&train.id==='survive') train.score++;
-    if(!tut&&!train&&!endless) spawnCoins(e.x+e.w/2,e.y+e.h/2,e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL);
+    if(!tut&&!train&&!endless) spawnCoins(e.x+e.w/2,e.y+e.h/2,
+      (e.type==='heavy'?COIN_KILL_HEAVY:COIN_KILL)*petCoinMul());
     if(e.type==='heavy'&&Math.random()<0.5) spawnHealthPickup(e);
   }
 }
@@ -5653,29 +5808,52 @@ function drawHUD(){
     } else { ctx.fillStyle='#441111'; heartPath(hx,hy); ctx.fill(); }
     ctx.strokeStyle='#880000'; ctx.lineWidth=1.5; heartPath(hx,hy); ctx.stroke();
   }
-  // Score
+  // Between the hearts and the score sit the two things that are a second health
+  // bar of their own. Both are optional, so a cursor lays them out and the score
+  // starts wherever they finish — the score used to carry a hard-coded `charges
+  // ? 245 : 200`, and adding Bolt's bar to that pair of magic numbers put it
+  // straight through the score text.
+  let hudX=200;
+  if(phil.shieldCharges>0||curShield().charges){
+    ctx.fillStyle='#8f6ad6'; ctx.font='bold 11px monospace';
+    ctx.fillText('◈',hudX-14,20);
+    const n=curShield().charges||0;
+    for(let i=0;i<n;i++){
+      ctx.fillStyle=i<phil.shieldCharges?'#c9a8ff':'#3a2f4d';
+      ctx.fillRect(hudX+i*9,11,7,9);
+    }
+    hudX+=n*9+12;
+  }
+  // Bolt's rest. Without it the one thing Bolt does is invisible — you would only
+  // find out it was asleep by taking the hit it was supposed to eat.
+  if(pet&&curPet().kind==='guardian'){
+    const rest=curPet().rest;
+    ctx.fillStyle=pet.rest>0?'#4a3f5f':PETS.bolt.color; ctx.font='bold 11px monospace';
+    ctx.fillText('●',hudX-13,20);
+    ctx.fillStyle='#2a2438'; ctx.fillRect(hudX,11,34,9);
+    ctx.fillStyle=pet.rest>0?'#6a5a8f':PETS.bolt.color;
+    ctx.fillRect(hudX,11,pet.rest>0?34*(1-pet.rest/rest):34,9);
+    hudX+=34+12;
+  }
+  // Score. The rest of the row keeps its old fixed positions unless the cursor has
+  // already run past them — with charges *and* Bolt in front of it, a five-figure
+  // score is wide enough to reach LIVES at its old hard-coded 360.
   ctx.fillStyle='#ffd700'; ctx.font='bold 14px monospace'; ctx.textAlign='left';
-  ctx.fillText('SCORE: '+G.score,curShield().charges?245:200,20);
+  const scoreTxt='SCORE: '+G.score;
+  ctx.fillText(scoreTxt,hudX,20);
+  hudX+=ctx.measureText(scoreTxt).width+22;
   // Lives
   ctx.fillStyle='#88aaff'; ctx.font='bold 13px monospace';
-  ctx.fillText('LIVES: '+G.lives,360,20);
+  const livesTxt='LIVES: '+G.lives, livesX=Math.max(360,hudX);
+  ctx.fillText(livesTxt,livesX,20);
+  hudX=livesX+ctx.measureText(livesTxt).width+22;
   // Carrying the secret key
   if(hasKey){
     ctx.save();
     ctx.shadowColor='#ffd54a'; ctx.shadowBlur=8;
     ctx.fillStyle='#ffd54a'; ctx.font='bold 13px monospace';
-    ctx.fillText('⚷ KEY',462,20);
+    ctx.fillText('⚷ KEY',Math.max(462,hudX),20);
     ctx.restore();
-  }
-  // Magic shield charges, right of the hearts so they read as a second health bar
-  if(phil.shieldCharges>0||curShield().charges){
-    const cx0=200;
-    ctx.fillStyle='#8f6ad6'; ctx.font='bold 11px monospace';
-    ctx.fillText('\u25c8',cx0-14,20);
-    for(let i=0;i<(curShield().charges||0);i++){
-      ctx.fillStyle=i<phil.shieldCharges?'#c9a8ff':'#3a2f4d';
-      ctx.fillRect(cx0+i*9,11,7,9);
-    }
   }
   // Coins
   ctx.fillStyle='#ffd700'; ctx.font='bold 13px monospace';
@@ -7620,16 +7798,33 @@ let shopSel=0, shopKeyHeld=false, shopReturn='TITLE', shopMsg='', shopMsgT=0;
 let shopTab='weapons';                       // 'weapons' | 'cloaks' | 'shields'
 let shopBand=1;                              // 0 tabs, 1 cards, 2 back
 
-const SHOP_TABS = ['weapons','cloaks','shields'];
-const shopIds = ()=> shopTab==='weapons' ? WEAPON_ORDER
-                   : shopTab==='cloaks'  ? CLOAK_ORDER : SHIELD_ORDER;
-const shopDefs = ()=> shopTab==='weapons' ? WEAPONS
-                    : shopTab==='cloaks'  ? CLOAKS : SHIELDS;
-const shopOwnedSet = ()=> shopTab==='weapons' ? shop.owned
-                        : shopTab==='cloaks'  ? shop.cloaks : shop.shields;
-const shopWornId = ()=> shopTab==='weapons' ? shop.equipped
-                      : shopTab==='cloaks'  ? shop.cloak : shop.shield;
-function shopTabBox(i){ return { x:W/2-309+i*206, y:104, w:200, h:32 }; }
+// One table per tab instead of a chain of ternaries. Four of them made the old
+// `a ? x : b ? y : z` form unreadable, and every lookup had to be edited in step.
+const SHOP_TAB_DEF = {
+  weapons: { label:'WEAPONS', order:WEAPON_ORDER, defs:WEAPONS,
+             owned:()=>shop.owned,   worn:()=>shop.equipped },
+  cloaks:  { label:'CLOAKS',  order:CLOAK_ORDER,  defs:CLOAKS,
+             owned:()=>shop.cloaks,  worn:()=>shop.cloak },
+  shields: { label:'SHIELDS', order:SHIELD_ORDER, defs:SHIELDS,
+             owned:()=>shop.shields, worn:()=>shop.shield },
+  pets:    { label:'PETS',    order:PET_ORDER,    defs:PETS,
+             owned:()=>shop.pets,    worn:()=>shop.pet },
+};
+const SHOP_TABS = ['weapons','cloaks','shields','pets'];
+const shopTabDef = ()=> SHOP_TAB_DEF[shopTab]||SHOP_TAB_DEF.weapons;
+const shopIds = ()=> shopTabDef().order;
+const shopDefs = ()=> shopTabDef().defs;
+const shopOwnedSet = ()=> shopTabDef().owned();
+const shopWornId = ()=> shopTabDef().worn();
+// Derived from the tab count rather than hard-coded. At three tabs this produces
+// exactly the old layout (200 wide, 6 apart, starting at W/2-309); a fourth tab
+// at the old fixed spacing ran 29px off the right edge of the canvas.
+function shopTabBox(i){
+  const n=SHOP_TABS.length, gap=6;
+  const w=Math.min(200,(W-60-gap*(n-1))/n);
+  const total=n*w+gap*(n-1);
+  return { x:(W-total)/2+i*(w+gap), y:104, w, h:32 };
+}
 function shopCard(i){
   // Six cloaks will not fit at the weapons' width, so each tab sets its own
   if(shopTab==='cloaks') return { x:22+i*153, y:150, w:143, h:240 };
@@ -7696,6 +7891,20 @@ function buyCloak(id){
   saveShop(); SFX.buy(); shopSay(cl.name+' bought and on!');
 }
 
+function buyPet(id){
+  const pd=PETS[id];
+  if(shop.pets.has(id)){
+    if(shop.pet===id){ shopSay(id==='none'?'Nobody is following Phil':pd.name+' is already with you'); SFX.pickup(); return; }
+    equipPet(id); SFX.power();
+    shopSay(id==='none'?'Pet sent home' : pd.name+' is following Phil!');
+    return;
+  }
+  if(shop.coins<pd.price){ SFX.broke(); shopSay('You need '+(pd.price-shop.coins)+' more coins'); return; }
+  shop.coins-=pd.price; shop.pets.add(id); shop.pet=id;
+  saveShop(); if(phil) initPet();
+  SFX.buy(); shopSay(pd.name+' bought — say hello!');
+}
+
 function buyShield(id){
   const sd=SHIELDS[id];
   if(shop.shields.has(id)){
@@ -7716,6 +7925,7 @@ function shopActivate(){
   if(!id) return;
   if(shopTab==='weapons') buyWeapon(id);
   else if(shopTab==='cloaks') buyCloak(id);
+  else if(shopTab==='pets') buyPet(id);
   else buyShield(id);
 }
 
@@ -7799,7 +8009,8 @@ function drawShop(){
   ctx.textAlign='center';
 
   // Tabs
-  ['WEAPONS','CLOAKS','SHIELDS'].forEach((label,i)=>{
+  SHOP_TABS.forEach((tab,i)=>{
+    const label=SHOP_TAB_DEF[tab].label;
     const b=shopTabBox(i), on=shopTab===SHOP_TABS[i];
     const sel=shopBand===0&&shopSel===i;
     ctx.fillStyle=on?'rgba(120,90,20,0.55)':'rgba(0,0,0,0.35)';
@@ -7811,7 +8022,7 @@ function drawShop(){
   });
 
   const ids=shopIds(), defs=shopDefs();
-  const weapons=shopTab==='weapons', shields=shopTab==='shields';
+  const weapons=shopTab==='weapons', shields=shopTab==='shields', pets=shopTab==='pets';
   const ownedSet=shopOwnedSet(), wornId=shopWornId();
   for(let i=0;i<ids.length;i++){
     const id=ids[i], def=defs[id], b=shopCard(i);
@@ -7834,11 +8045,12 @@ function drawShop(){
     if(!owned&&!afford) ctx.globalAlpha=0.45;
     if(weapons) drawWeaponIcon(id,b.x+b.w/2,b.y+32,2.1);
     else if(shields) drawShieldIcon(id,b.x+b.w/2,b.y+31);
+    else if(pets) drawPetIcon(id,b.x+b.w/2,b.y+32);
     else drawCloakIcon(id,b.x+b.w/2,b.y+40);
     ctx.restore();
 
     // Same reason: the icon carries the garment's colour, the name stays legible
-    ctx.fillStyle=owned?((weapons||shields)?def.color:'#e8e2d0'):(afford?'#e8e2d0':'#79808a');
+    ctx.fillStyle=owned?((weapons||shields||pets)?def.color:'#e8e2d0'):(afford?'#e8e2d0':'#79808a');
     ctx.font='bold '+(narrow?13:17)+'px monospace';
     ctx.fillText(def.name,b.x+b.w/2,b.y+(narrow?96:84));
 
@@ -7846,7 +8058,7 @@ function drawShop(){
     shopWrap(def.blurb,narrow?19:26).forEach((l,li)=>
       ctx.fillText(l,b.x+b.w/2,b.y+(narrow?114:104)+li*13));
 
-    if(weapons||shields){
+    if(weapons||shields||pets){
       ctx.textAlign='left';
       def.stats.forEach((st,si)=>{
         ctx.fillStyle='#7f8a96'; ctx.font='10px monospace';
@@ -7867,8 +8079,11 @@ function drawShop(){
       ctx.fillStyle=col; ctx.font='bold '+(narrow?11:13)+'px monospace';
       ctx.fillText(text,b.x+b.w/2,sy+18);
     };
-    if(worn) strip('rgba(60,140,70,0.5)','#7fd06a',narrow?'\u2713 WEARING':'\u2713 EQUIPPED','#c8ffb8');
-    else if(owned) strip('rgba(40,60,90,0.5)','#6a8fbf',narrow?'WEAR IT':'OWNED \u2014 EQUIP','#bcd8ff');
+    // You do not "equip" a dog. Each tab says what its own slot actually does.
+    const wornTxt = pets?(id==='none'?'\u2713 ON HIS OWN':'\u2713 FOLLOWING') : narrow?'\u2713 WEARING':'\u2713 EQUIPPED';
+    const ownTxt  = pets?(id==='none'?'GO ALONE':'BRING IT ALONG') : narrow?'WEAR IT':'OWNED \u2014 EQUIP';
+    if(worn) strip('rgba(60,140,70,0.5)','#7fd06a',wornTxt,'#c8ffb8');
+    else if(owned) strip('rgba(40,60,90,0.5)','#6a8fbf',ownTxt,'#bcd8ff');
     else strip(afford?'rgba(120,90,20,0.55)':'rgba(50,25,25,0.55)',
                afford?'#ffd54a':'#7a4a4a',
                def.price+(narrow?'':' COINS'), afford?'#ffe89a':'#c98d8d');
@@ -7923,6 +8138,95 @@ function drawShieldIcon(id,cx,cy){
     ctx.beginPath(); ctx.moveTo(0,-h/2+4); ctx.lineTo(0,h/2-4); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-w/2+4,0); ctx.lineTo(w/2-4,0); ctx.stroke();
   }
+  ctx.restore();
+}
+
+// One body for both jobs: the shop card and the pet following Phil call this with
+// different scales, so an exhibit can never drift from what you actually get.
+// `t` drives the flap/bound, `rest` dims a sleeping Bolt.
+function drawPetBody(id,cx,cy,scale,opts={}){
+  const def=PETS[id]; if(!def||!def.kind) return;
+  const t=opts.t||0, facingR=opts.facingR!==false, resting=!!opts.resting;
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.scale(facingR?scale:-scale,scale);
+  if(resting) ctx.globalAlpha=0.45;
+
+  if(id==='pip'){
+    const flap=Math.sin(t*3)*0.9;
+    ctx.fillStyle=def.color;
+    ctx.beginPath(); ctx.ellipse(0,0,8,6,0,0,Math.PI*2); ctx.fill();       // body
+    ctx.beginPath(); ctx.arc(6.5,-4,4.5,0,Math.PI*2); ctx.fill();          // head
+    ctx.fillStyle='#ffbb55';                                              // beak
+    ctx.beginPath(); ctx.moveTo(10.5,-4); ctx.lineTo(16,-2.6); ctx.lineTo(10.5,-1.4);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#14140f';
+    ctx.beginPath(); ctx.arc(7.6,-5.2,1.1,0,Math.PI*2); ctx.fill();        // eye
+    ctx.fillStyle=def.color;                                              // wing
+    ctx.beginPath(); ctx.ellipse(-1,-1,7,3.2,flap-0.5,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=def.color; ctx.lineWidth=2; ctx.lineCap='round';       // tail
+    ctx.beginPath(); ctx.moveTo(-7,0); ctx.lineTo(-14,-3); ctx.stroke();
+  }
+  else if(id==='rex'){
+    const bound=Math.sin(t*2)*1.6;
+    ctx.strokeStyle=def.color; ctx.lineWidth=2.4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-9,-6+bound*0.3); ctx.lineTo(7,-7+bound*0.3); ctx.stroke();  // back
+    ctx.beginPath(); ctx.arc(11,-8+bound*0.3,4.5,0,Math.PI*2);                               // head
+    ctx.fillStyle=def.color; ctx.fill();
+    ctx.strokeStyle=def.color; ctx.lineWidth=2;                                              // ears
+    ctx.beginPath(); ctx.moveTo(10,-12+bound*0.3); ctx.lineTo(8.5,-16+bound*0.3); ctx.stroke();
+    ctx.fillStyle='#14140f';
+    ctx.beginPath(); ctx.arc(12.6,-9+bound*0.3,1,0,Math.PI*2); ctx.fill();                   // eye
+    ctx.strokeStyle=def.color; ctx.lineWidth=2.2;                                            // legs
+    ctx.beginPath(); ctx.moveTo(-6,-6); ctx.lineTo(-7-bound,0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-3,-6); ctx.lineTo(-1+bound,0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(3,-6.5); ctx.lineTo(2-bound,0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6,-6.5); ctx.lineTo(8+bound,0); ctx.stroke();
+    ctx.lineWidth=2;                                                                         // tail
+    ctx.beginPath(); ctx.moveTo(-9,-6); ctx.lineTo(-15,-11+Math.sin(t*5)*2); ctx.stroke();
+    if(opts.biting){                                                                         // teeth
+      ctx.fillStyle='#ffffff';
+      ctx.beginPath(); ctx.moveTo(14,-6); ctx.lineTo(19,-7.5); ctx.lineTo(14,-9);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  else {                                          // bolt — a floating eye of a thing
+    const spin=t*1.4;
+    ctx.strokeStyle=def.color; ctx.lineWidth=1.8;
+    ctx.beginPath(); ctx.ellipse(0,0,11,4.5,spin,0,Math.PI*2); ctx.stroke();   // orbiting ring
+    ctx.fillStyle=def.color;
+    ctx.beginPath(); ctx.arc(0,0,6.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=resting?'#4a3f5f':'#ffffff';
+    ctx.beginPath(); ctx.arc(2,-1,2.6,0,Math.PI*2); ctx.fill();
+    if(!resting){
+      ctx.globalAlpha=0.35; ctx.fillStyle=def.color;
+      ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.restore();
+  ctx.lineCap='butt';
+}
+
+function drawPetIcon(id,cx,cy){
+  if(id==='none'){
+    ctx.save(); ctx.translate(cx,cy);
+    ctx.strokeStyle='#5a6470'; ctx.lineWidth=2; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.arc(0,0,13,0,Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+    return;
+  }
+  drawPetBody(id,cx,cy,1.5,{ t:frameN*0.05, facingR:true });
+}
+
+function drawPet(){
+  if(!pet||!phil) return;
+  if(phil.dead&&phil.deathTimer<=0) return;
+  const def=curPet(); if(!def.kind) return;
+  ctx.save();
+  if(phil.dead) ctx.globalAlpha=Math.max(0,phil.deathTimer/1.8);
+  const bobY=def.kind==='guard'?0:Math.sin(pet.bob)*3;
+  drawPetBody(pet.id,pet.x-cam.x,pet.y-cam.y+bobY,1.35,
+    { t:pet.bob*3, facingR:pet.facingR, resting:pet.rest>0, biting:pet.biteFx>0 });
   ctx.restore();
 }
 
@@ -9718,6 +10022,7 @@ function loop(ts){
       // on. One call site speeds up movement, attack timers and recovery windows
       // for all 12 bosses without touching any individual boss AI.
       updateBoss(G.mode==='RUSH'?dt*rush.speed:dt);
+      updatePet(dt);         // after the enemies move, so Rex bites where they are now
       updateProjs(dt);
       updatePickups(dt);
       updateHazards(dt);
@@ -9780,6 +10085,8 @@ function loop(ts){
     });
     ctx.restore();
   }
+
+  drawPet();               // behind Phil: it trails him, and he stays the thing you watch
 
   // Draw Phil
   if(!phil.dead||phil.deathTimer>0){

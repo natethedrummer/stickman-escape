@@ -105,6 +105,23 @@ A cloak layers over a Boss Rush skin, so you can wear both.
 
 Magic charges refill every time Phil respawns, and show as pips next to the hearts.
 
+### Pets
+
+Something that follows Phil, sold from the PETS tab. Each one does exactly one job — you cannot aim
+them or tell them what to do.
+
+| Pet | Price | What it does |
+|-----|-------|--------------|
+| No pet | free | Phil goes it alone |
+| Pip | 200 | A bird. **Doubles the coins** from every enemy Phil beats. Never fights |
+| Rex | 400 | A dog. **Bites anything that gets close** to Phil for 1, once a second — but he cannot get through a Heavy Soldier's raised shield |
+| Bolt | 600 | A floating guardian. **Eats one whole hit**, then rests 12 seconds. Its rest shows as a bar next to the hearts |
+
+Bolt is spent before a magic shield's charges, because Bolt comes back on its own and charges only
+come back on a respawn. An invincibility star still beats both.
+
+Pets sit out the tutorial and the training drills — those measure Phil, not what is following him.
+
 ---
 
 ## 🗺️ Game Structure
@@ -218,6 +235,7 @@ art, what they do, and how many you have beaten across every run you have ever p
 - 6 themed worlds with 13 boss fights, all using multi-phase AI
 - Boss Rush mode — all 12 bosses back to back, with a difficulty ramp and unlockable Phil skins
 - Challenge of the Day — one date-generated level a day, the same one for everybody, one attempt
+- Pets — a bird that doubles coins, a dog that bites, and a guardian that eats a hit for you
 - Parallax scrolling backgrounds
 - Web Audio API synthesized sound effects (no audio files)
 - Particle system for hits, dust, and deaths
