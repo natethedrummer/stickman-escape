@@ -3,6 +3,28 @@
 ## [Unreleased]
 
 ### Added
+- **2-player local co-op.** A `PLAYERS: 1 / 2` toggle on the title screen; two stickmen on one
+  screen, sharing the level, the score, the coins and the shop loadout. Player one keeps A/D, W or
+  Space, Z and X; player two is the arrow keys with `,` to attack and `.` to shield. Player two is
+  orange, both wear a `P1`/`P2` tag, and the setting is remembered the way MUSIC is
+  ([#19](https://github.com/natethedrummer/stickman-escape/issues/19))
+- **Each player has their own five hearts, and going down is not dying.** Emptying your hearts puts
+  you *down* — flat on the ground, out of the fight, with a three-second clock over you — and your
+  partner brings you back at their side with two hearts. Only both players down at the same moment
+  costs the team a life, from the same shared counter a one-player run uses. A good player can carry
+  a struggling one, which is the whole point of playing it with a small child
+- Both players are tethered to the one screen: once the camera has settled, whoever runs ahead is
+  stopped at the edge rather than leaving their partner behind. The camera holds the midpoint between
+  them, and ignores a downed player so it never drags the view back off the one still playing
+- Enemies chase whichever player is nearer to them, measured per enemy. Bosses pick the nearer player
+  and commit for the frame, but their wide attacks — shockwaves, sweeps, lasers, stomp columns, bomb
+  blasts — hit anyone standing in them, so a second player is never safe just for not being the
+  target
+- Either player can take a power-up, set off a falling rock, hit the checkpoint, carry the secret key
+  or touch the finish flag
+- On the dark secret stage each player gets their own lantern. One radial gradient cannot cut two
+  holes in one sheet of darkness, so with two players the sheet is built offscreen and each lantern
+  is punched out of it — the falloff is identical to the one-player light, to within rounding
 - Pets — a fourth slot in the shop, and the first thing you buy that is a creature in the world
   rather than something Phil wears. Each one does exactly one job and nothing else, which is what
   keeps three of them apart in a player's head: **Pip** (200) is a bird that doubles the coins from
@@ -62,6 +84,14 @@
   at the one level you get today, and the map would launch a campaign level with the attempt live
 
 ### Fixed
+- **Museum records are no longer lost outside the normal level-complete path**
+  ([#60](https://github.com/natethedrummer/stickman-escape/issues/60)). Unlocks and kill counts were
+  held in memory and only written to `localStorage` by `levelComplete()`, which three paths never
+  reach: **Boss Rush** (`rushBossCleared()` runs instead, so a run that beat every boss in the game
+  unlocked *nothing* on reload), **secret levels** (`secretComplete()` never flushed, losing anything
+  met inside the stage), and **quitting mid-level** from the pause menu, which dropped everything
+  seen since the level started. All three now flush, and the pause-menu routes that abandon a level
+  are listed in one place rather than each remembering to do it
 - Secret keys and doors no longer appear in runs that are not the campaign. Leaving through a secret
   door calls `leaveSecret()` → `nextLevel()`, which advances the campaign — so a door found in an
   **Endless** run (which has been possible since Endless shipped: all six secret levels are in its

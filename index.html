@@ -496,12 +496,29 @@ function syncTouchPad(){
   document.getElementById('touch').style.display = want?'block':'none';
   if(!want){ touches.L=touches.R=touches.J=touches.A=touches.S=touches.P=false; }
 }
+// One player reads every binding. Two players have to split them, so the game
+// keys live in pads and `pad` says whose turn to be read — updatePhil is run
+// once per player with the pad swapped under it. PAD_SOLO is the union of the
+// two, which is exactly the one-player scheme this game has always had.
+const PAD_SOLO={ left:['ArrowLeft','KeyA'], right:['ArrowRight','KeyD'],
+                 jump:['Space','ArrowUp','KeyW'], atk:['KeyZ','KeyJ'],
+                 shield:['KeyX','KeyK','ShiftLeft','ShiftRight'] };
+const PAD_P1  ={ left:['KeyA'], right:['KeyD'], jump:['KeyW','Space'],
+                 atk:['KeyZ'], shield:['KeyX'] };
+const PAD_P2  ={ left:['ArrowLeft'], right:['ArrowRight'], jump:['ArrowUp'],
+                 atk:['Comma'], shield:['Period'] };
+let pad=PAD_SOLO;
+const held=list=>list.some(k=>keys[k]);
+// The touch pad is a single physical device, so it drives player one only. A
+// second player needs a keyboard.
+const padTouch=f=>pad!==PAD_P2&&!!touches[f];
+
 const In={
-  left:  ()=>keys['ArrowLeft'] ||keys['KeyA']||touches.L,
-  right: ()=>keys['ArrowRight']||keys['KeyD']||touches.R,
-  jump:  ()=>keys['Space']||keys['ArrowUp']||keys['KeyW']||touches.J,
-  atk:   ()=>keys['KeyZ']||keys['KeyJ']||touches.A,
-  shield:()=>keys['KeyX']||keys['KeyK']||keys['ShiftLeft']||keys['ShiftRight']||touches.S,
+  left:  ()=>held(pad.left)  ||padTouch('L'),
+  right: ()=>held(pad.right) ||padTouch('R'),
+  jump:  ()=>held(pad.jump)  ||padTouch('J'),
+  atk:   ()=>held(pad.atk)   ||padTouch('A'),
+  shield:()=>held(pad.shield)||padTouch('S'),
   start: ()=>keys['Enter']||keys['Space']||touches.start,
   restart:()=>keys['KeyR']||keys['Enter']||touches.start,
   pause:  ()=>keys['Escape']||keys['KeyP']||touches.P,
@@ -1870,8 +1887,27 @@ function addScore(base){
   return pts;
 }
 
-function initPhil(sx,sy){
-  phil={ x:sx,y:sy, vx:0,vy:0, w:PHIL_W,h:PHIL_H,
+// ══════════════════════════════════════════════════════
+//  PLAYERS — ONE, OR TWO IN CO-OP
+// ══════════════════════════════════════════════════════
+// `phil` is read about three hundred times: every enemy and boss AI, every
+// hazard, the pickups, the camera and all the drawing. Threading a player
+// argument through all of that would touch the whole file, so instead `phil`
+// means "the player being processed right now" and co-op swaps it — updatePhil
+// runs once per player with phil (and their pad, and their safe ground) pointed
+// at each in turn, and the AI runs with phil pointed at whoever it should chase.
+// Every existing line keeps working untouched, and one-player runs take none of
+// these branches at all.
+let coop=false;            // is this run two-player?
+// The title toggle: what the NEXT level will start as. Persisted, like MUSIC.
+let coopArmed=(()=>{ try{ return localStorage.getItem('pe_coop')==='1'; }catch(e){ return false; } })();
+let P1=null, P2=null;      // the player objects; `phil` always points at one
+const P2_COLOR='#ff9a3c', P2_SWORD='#ffd9a0';
+const REVIVE_DELAY=3.0;    // seconds a downed player waits for the rescue
+const REVIVE_HEALTH=2.0;   // hearts you come back with — enough to matter, not a reset
+
+function makePlayer(sx,sy,pid){
+  return { pid, x:sx,y:sy, vx:0,vy:0, w:PHIL_W,h:PHIL_H,
     health:5.0, maxHealth:5.0, facingR:true,
     onGround:false, wasOnGround:false,
     walkCycle:0, jumpBuffer:0,
@@ -1882,10 +1918,101 @@ function initPhil(sx,sy){
     // death hands them all back rather than leaving a dud weapon equipped.
     ammo:WEAPONS.bazooka.ammoMax, boomOut:false, fireFx:0,
     // Magic charges refill on every respawn, same as rockets do
-    shieldCharges:(SHIELDS[shop.shield]||SHIELDS.wood).charges||0, shieldFx:0 };
+    shieldCharges:(SHIELDS[shop.shield]||SHIELDS.wood).charges||0, shieldFx:0,
+    // Co-op state. `down` is not `dead`: a downed player is out of the fight but
+    // the run is still alive, and their partner brings them back.
+    pad: pid===2?PAD_P2:(coop?PAD_P1:PAD_SOLO),
+    down:false, downTimer:0,
+    // Per-player copy of the pit-teleport anchor. Shared, P2 falling in a hole
+    // would be dragged to wherever P1 last stood.
+    safeGround:{x:sx,y:sy} };
+}
+
+// Rebuilds whichever player is current — that is the respawn path, and in co-op
+// it has to land on the right one of the two.
+function initPhil(sx,sy){
+  const pid=phil?phil.pid:1;
+  phil=makePlayer(sx,sy,pid);
+  if(pid===2) P2=phil; else P1=phil;
   // Rebuilt with Phil, so Bolt's rest is handed back by a death for free — the
   // same trick the rockets and the magic charges use
   initPet();
+}
+
+// The level-start path: builds the whole roster. This is also the one place the
+// armed toggle turns into an actual co-op run, so switching it mid-level can
+// never half-apply.
+function initPlayers(sx,sy){
+  coop = coopArmed && coopAllowed();
+  P1=makePlayer(sx,sy,1);
+  // Player two starts a stride to the right — still well inside the 300px
+  // enemy-free zone around the spawn, and on the same ground line as player one.
+  P2 = coop ? makePlayer(Math.min(sx+40,(levelData?levelData.worldW:sx+40)-PHIL_W),sy,2) : null;
+  phil=P1; pad=P1.pad;
+  initPet();
+}
+
+// Co-op is for playing levels together. The solo-by-design modes keep their own
+// rules: the tutorial teaches one set of controls, and a training drill and the
+// daily challenge are each scored as one person's attempt.
+// Keyed on G.mode rather than on `tut`/`train`/`daily`, because startTutorial
+// assigns `tut` *after* it builds the level — reading the object here would let
+// co-op into the tutorial on the way in. G.mode is set first in all of them.
+const SOLO_MODES=new Set(['TUTORIAL','TRAINING','DAILY']);
+function coopAllowed(){ return !SOLO_MODES.has(G.mode); }
+
+function otherPlayer(p){ return p===P1 ? P2 : P1; }
+function livePlayers(){ return coop ? [P1,P2].filter(p=>p&&!p.down) : [phil]; }
+
+// Runs `fn` with the globals that mean "the current player" pointed at `p`, then
+// puts them back. This is what lets three hundred untouched references to `phil`
+// serve two players.
+function withPlayer(p,fn){
+  if(!coop) return fn();
+  const sPhil=phil, sSafe=lastSafeGround, sPad=pad, sLvl=levelData;
+  phil=p; lastSafeGround=p.safeGround; pad=p.pad;
+  try{ return fn(); }
+  finally{
+    // Touching the finish flag or a secret door replaces levelData *and* the
+    // whole roster from inside this call. Restoring the saved globals over the
+    // new ones would put the players from the level we just left back in place —
+    // which is exactly the "entity from a dead level" class of bug this codebase
+    // has been bitten by before. Only unwind if we're still in the same level.
+    if(levelData===sLvl){
+      p.safeGround=lastSafeGround; phil=sPhil; lastSafeGround=sSafe; pad=sPad;
+    }
+  }
+}
+
+// For hit tests that live outside updatePhil's per-player pass — hazards, bomb
+// blasts, boss shockwaves. In one-player this is exactly the old single check.
+function eachPlayer(fn){
+  if(!coop) return fn(phil);
+  for(const p of [P1,P2]){
+    if(!p||p.down||p.dead) continue;
+    withPlayer(p,()=>fn(p));
+  }
+}
+
+// Point the "current player" globals at `p` for a stretch of AI. Unlike
+// withPlayer this does not restore — the callers each aim before they run, and
+// resetAim puts it back on player one at the end of the frame. It deliberately
+// leaves lastSafeGround alone: only updatePhil and the pit hazards write that,
+// and both of those already run inside withPlayer/eachPlayer.
+function aimAI(p){ if(!coop||!p) return; phil=p; pad=p.pad; }
+function resetAim(){ if(coop&&P1){ phil=P1; pad=P1.pad; } }
+
+// Who the enemies and the boss are chasing. Nearest living player, measured from
+// the thing doing the chasing; ties and one-player both give player one.
+function nearestPlayer(x,y){
+  const live=coop?[P1,P2].filter(p=>p&&!p.down&&!p.dead):[phil];
+  if(!live.length) return P1||phil;
+  let best=live[0], bd=Infinity;
+  for(const p of live){
+    const d=Math.hypot((p.x+p.w/2)-x,(p.y+p.h/2)-y);
+    if(d<bd){ bd=d; best=p; }
+  }
+  return best;
 }
 
 // ── PET ──
@@ -2025,7 +2152,7 @@ function startLevel(){
   checkpointRespawn = null;
   parts     = [];
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   lastSafeGround = {...levelData.playerStart};
 
   if(levelData.isBoss){
@@ -2067,7 +2194,7 @@ function startSecretLevel(world=G.world, opts={}){
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
   hasKey=false;
   gravMul = theme==='moon' ? 0.5 : 1;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   lastSafeGround = {...levelData.playerStart};
   G.screen='SECRET_INTRO'; secretIntroTimer=2.8;
   SFX.clear();
@@ -2084,6 +2211,7 @@ function secretComplete(){
   secretAward = addScore((first&&!secretRun.cheat) ? meta.bonus : 500);
   lastCoinAward = addCoins(COIN_SECRET);
   secretGolden = secretRun.cheat ? false : checkGoldenUnlock();
+  if(museumDirty) saveMuseum();   // secrets don't run levelComplete() either
   G.lives=3; phil.health=5.0;
   SFX.win();
   burst(levelData.flagX,levelData.flagY-20,'#ffd54a',20,150,0);
@@ -2121,7 +2249,7 @@ function startTutorial(from='TITLE'){
   projs=[]; pickups=[]; hazards=[]; boss=null; parts=[]; dlg=null;
   checkActivated=false; checkpointRespawn=null;
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   lastSafeGround={...levelData.playerStart};
   tut={ i:0, jumps:0, blocks:0, held:0, mercyT:0, flash:'', flashT:0 };
   enterTutStep(0);
@@ -2219,7 +2347,7 @@ function startTraining(id){
   projs=[]; pickups=[]; hazards=[]; boss=null; parts=[];
   checkActivated=false; checkpointRespawn=null;
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   lastSafeGround={...levelData.playerStart};
   d.start();
   G.screen='PLAYING';
@@ -2427,7 +2555,7 @@ function endlessNextDepth(health){
   boss=null; parts=[];
   checkActivated=false; checkpointRespawn=null;
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   phil.health=Math.max(0.5,Math.min(phil.maxHealth,health));
   lastSafeGround={...levelData.playerStart};
   G.screen='PLAYING';
@@ -2568,7 +2696,7 @@ function startDailyRun(){
   boss=null; parts=[];
   checkActivated=false; checkpointRespawn=null;
   cam.x=0; cam.y=0; shake=0; paused=false; combo=0; comboTimer=0;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   lastSafeGround={...levelData.playerStart};
   G.screen='PLAYING';
 }
@@ -2646,7 +2774,10 @@ function startRushFight(health){
     G.world=slot[0]; G.level=slot[1];
     startLevel();                 // reuses the campaign arena; skips cutscenes in RUSH mode
   }
-  phil.health=Math.max(0.5,Math.min(5.0,health));   // health carries across fights
+  // Health carries across fights — for both players, or player two would arrive
+  // at every boss on a full bar while player one wore the whole run down.
+  const carried=Math.max(0.5,Math.min(5.0,health));
+  for(const p of (coop?[P1,P2]:[phil])) if(p) p.health=carried;
   applyRushScaling();
 }
 
@@ -2663,6 +2794,9 @@ function applyRushScaling(){
 
 function rushBossCleared(){
   rush.cleared++;
+  // Boss Rush never reaches levelComplete(), so without this a run that beat
+  // every boss in the game still left the museum empty on the next reload.
+  if(museumDirty) saveMuseum();
   lastCoinAward=addCoins(COIN_BOSS);                // Boss Rush pays for weapons too
   phil.health=Math.min(5.0,phil.health+1.5);        // heal between fights (playtested: 1.0 was a touch harsh)
   for(const id of SKIN_ORDER){
@@ -2763,7 +2897,7 @@ function startFinalBossLevel(){
   levelData.hazards=[];
   levelData.playerStart={x:120,y:GROUND_Y-44};
   enemies=[]; projs=[]; pickups=[]; hazards=[]; parts=[]; cam.x=0; cam.y=0; shake=0;
-  initPhil(levelData.playerStart.x, levelData.playerStart.y);
+  initPlayers(levelData.playerStart.x, levelData.playerStart.y);
   lastSafeGround={...levelData.playerStart};
   boss=spawnBoss('mech',1600);
 }
@@ -2823,6 +2957,9 @@ function useLevelCheat(){
 // ══════════════════════════════════════════════════════
 function updatePhil(dt){
   if(phil.dead){ phil.deathTimer-=dt; return; }
+  // A downed co-op player is frozen where they fell until the rescue lands.
+  // updateCoop runs their timer; nothing else about them should tick.
+  if(phil.down) return;
 
   const left=In.left(), right=In.right();
   const shielding = In.shield() && !phil.attacking;
@@ -2848,8 +2985,8 @@ function updatePhil(dt){
 
   // Attack — while Phil is holding the shrink ray, Z fires that instead of the
   // sword, so the finale doesn't ask the player to learn a new key at the climax
-  if(rayCD>0) rayCD-=dt;
-  if(rayFx){ rayFx.life-=dt; if(rayFx.life<=0) rayFx=null; }
+  // (the ray's own cooldown is a frame global and ticks in tickFrameTimers, or
+  // co-op's second pass through this function would run it down twice as fast)
   const wep=curWeapon();
   if(phil.fireFx>0) phil.fireFx-=dt;
   if(hasRay){
@@ -2864,7 +3001,6 @@ function updatePhil(dt){
   if(phil.atkTimer>0) phil.atkTimer-=dt; else phil.attacking=false;
   if(phil.atkCD>0) phil.atkCD-=dt;
   if(phil.invTimer>0) phil.invTimer-=dt;
-  if(comboTimer>0){ comboTimer-=dt; if(comboTimer<=0) combo=0; }
   tickPowerups(dt);
 
   moveCollide(phil, levelData.plats, dt);
@@ -3084,7 +3220,19 @@ function philTakeDmg(amt, opts={}){
   return !immune;
 }
 
+// Timers that belong to the frame rather than to a player. They used to tick
+// inside updatePhil, which co-op calls once per player — leaving them there ran
+// the shrink ray's cooldown and the combo clock down at double speed.
+function tickFrameTimers(dt){
+  if(rayCD>0) rayCD-=dt;
+  if(rayFx){ rayFx.life-=dt; if(rayFx.life<=0) rayFx=null; }
+  if(comboTimer>0){ comboTimer-=dt; if(comboTimer<=0) combo=0; }
+}
+
 function philDie(){
+  // In co-op, running out of hearts takes you out of the fight but not out of
+  // the run — your partner can pick you back up.
+  if(coop) return playerDown();
   phil.dead=true; phil.deathTimer=1.8;
   burst(phil.x+phil.w/2,phil.y+phil.h/2,'#4488ff',20,150,400);
   SFX.die(); shake=0.7;
@@ -3115,6 +3263,82 @@ function respawnPhil(){
   initPhil(sp.x,sp.y);
   lastSafeGround={x:sp.x,y:sp.y};
   G.screen='PLAYING';
+}
+
+// ══════════════════════════════════════════════════════
+//  CO-OP: GOING DOWN, AND BEING PICKED BACK UP
+// ══════════════════════════════════════════════════════
+// Each player has their own five hearts. Emptying them puts you DOWN, not dead:
+// the run carries on, and after REVIVE_DELAY your partner hauls you back up at
+// their side. Only both players down at the same moment costs the team a life.
+function playerDown(){
+  const p=phil;
+  if(p.down) return;
+  p.down=true; p.downTimer=0; p.health=0;
+  p.vx=0; p.vy=0; p.attacking=false; p.shielding=false; p.boomOut=false;
+  // Park them on their own last safe ground. A player who went down in a pit or
+  // under a saw would otherwise lie there off the bottom of the level, or be
+  // revived straight back into the thing that felled them.
+  const sp=p.safeGround||checkpointRespawn||levelData.playerStart;
+  p.x=sp.x; p.y=sp.y; p.onGround=false; p.wasOnGround=false;
+  burst(p.x+p.w/2,p.y+p.h/2,'#4488ff',20,150,400);
+  SFX.die(); shake=0.7;
+  combo=0; comboTimer=0;
+  const o=otherPlayer(p);
+  if(!o||o.down) coopWipe();
+  else scorePopup(p.x+p.w/2,p.y-24,'P'+p.pid+' IS DOWN!','#ff8866');
+}
+
+// Both down at once. That is what a death costs in co-op, and it spends from the
+// same shared lives counter one-player runs use.
+function coopWipe(){
+  G.lives--;
+  if(G.lives>0) setTimeout(()=>{ if(coop&&G.screen==='PLAYING') coopRestart(); },1800);
+  else          setTimeout(()=>{ if(coop) G.screen='GAME_OVER'; },1800);
+}
+
+function coopRestart(){
+  const sp=checkpointRespawn||levelData.playerStart;
+  resetFallenPlatforms();
+  P1=makePlayer(sp.x,sp.y,1);
+  P2=makePlayer(Math.min(sp.x+40,levelData.worldW-PHIL_W),sp.y,2);
+  phil=P1; pad=P1.pad;
+  lastSafeGround={x:sp.x,y:sp.y};
+  initPet();
+  G.screen='PLAYING';
+}
+
+function updateCoop(dt){
+  if(!coop) return;
+  for(const p of [P1,P2]){
+    if(!p||!p.down) continue;
+    const o=otherPlayer(p);
+    // Nobody is coming while the partner is down too — that case is the wipe,
+    // already scheduled, and counting up here would revive into a dead run.
+    if(!o||o.down) continue;
+    p.downTimer+=dt;
+    if(p.downTimer<REVIVE_DELAY) continue;
+    revivePlayer(p,o);
+  }
+}
+
+function revivePlayer(p,o){
+  // Land beside the rescuer, on the side behind them, and never inside a wall at
+  // the level edge. If the partner is in mid-air, use the ground they last stood
+  // on instead — dropping someone into the pit their partner is jumping over is
+  // not a rescue.
+  const anchor = o.onGround ? {x:o.x,y:o.y} : (o.safeGround||{x:o.x,y:o.y});
+  const side = o.facingR ? -40 : 40;
+  const nx = Math.max(0,Math.min(levelData.worldW-PHIL_W, anchor.x+side));
+  const revived=makePlayer(nx,anchor.y,p.pid);
+  revived.health=REVIVE_HEALTH;
+  revived.invTimer=2.0;               // a moment's grace, same as a fresh spawn
+  revived.facingR=o.facingR;
+  revived.safeGround={x:nx,y:anchor.y};
+  if(p.pid===2) P2=revived; else P1=revived;
+  burst(nx+PHIL_W/2,anchor.y+PHIL_H/2,'#7dffb0',18,140,0);
+  scorePopup(nx+PHIL_W/2,anchor.y-24,'P'+p.pid+' IS BACK!','#7dffb0');
+  SFX.power();
 }
 
 function levelComplete(){
@@ -3333,6 +3557,11 @@ function updateEnemies(dt){
     e.atkCD=Math.max(0,e.atkCD-dt);
     e.stateTimer=Math.max(0,e.stateTimer-dt);
 
+    // Two-player: this enemy chases whichever player is nearer to it. Aimed
+    // before dx/dy is measured, so every AI below — and the arrows and bombs
+    // they fire — inherits the choice without a line of its own changing.
+    aimAI(nearestPlayer(e.x+e.w/2,e.y+e.h/2));
+
     const dx=(phil.x+phil.w/2)-(e.x+e.w/2);
     const dy=(phil.y+phil.h/2)-(e.y+e.h/2);
     const dist=Math.hypot(dx,dy);
@@ -3421,7 +3650,9 @@ function spawnCoins(x,y,n){
 function updateCoin(p,dt){
   p.t+=dt; p.spin+=dt*7;
   if(p.t<=0) return;                                    // staggered spawn delay
-  if(p.t<COIN_POP||phil.dead){
+  // Coins are team money — one purse, so a coin just flies to whoever is closer.
+  aimAI(nearestPlayer(p.x+7,p.y+7));
+  if(p.t<COIN_POP||phil.dead||phil.down){
     p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=1100*dt;
     if(p.y>H+200) p.dead=true;                          // only reachable while Phil is dead
     return;
@@ -3443,12 +3674,18 @@ function updatePickups(dt){
     if(p.dead){ pickups.splice(i,1); continue; }
     if(p.type==='coin'){ updateCoin(p,dt); continue; }
     p.bob+=dt*4;
-    if(phil.dead||!overlap(phil,p)) continue;
-    // A heart on a full health bar is left on the ground to come back for.
-    if(p.type==='health'&&phil.health>=phil.maxHealth) continue;
-    p.dead=true;
-    applyPowerup(p);
+    // Either player can pick it up, and a power-up applies to the one who
+    // touched it — eachPlayer points `phil` at them, so applyPowerup lands on
+    // the right hearts and the right timers with no change of its own.
+    eachPlayer(()=>{
+      if(p.dead||phil.dead||!overlap(phil,p)) return;
+      // A heart on a full health bar is left on the ground to come back for.
+      if(p.type==='health'&&phil.health>=phil.maxHealth) return;
+      p.dead=true;
+      applyPowerup(p);
+    });
   }
+  resetAim();          // the coin magnet leaves `phil` aimed at whoever it chose
 }
 
 function isPointOverPit(x){
@@ -3510,16 +3747,22 @@ function updateHazards(dt){
         else if(h.y>h.max){ h.y=h.max; h.dir=-1; }
       }
       h.rot+=dt*10*h.dir;
-      if(!phil.dead&&h.cooldown<=0&&overlap(phil,h)){
-        if(philTakeDmg(h.damage||1,{ignoreInv:true,setInv:false})) h.cooldown=SAW_TOUCH_COOLDOWN;
-      }
+      // A saw cuts whoever walks into it. eachPlayer is the single check in
+      // one-player runs and both players in co-op.
+      eachPlayer(()=>{
+        if(!phil.dead&&h.cooldown<=0&&overlap(phil,h)){
+          if(philTakeDmg(h.damage||1,{ignoreInv:true,setInv:false})) h.cooldown=SAW_TOUCH_COOLDOWN;
+        }
+      });
       continue;
     }
     if(h.type==='pit'){
       h.pulse+=dt*4;
-      if(!phil.dead&&h.cooldown<=0&&pitHitsPhil(h)){
-        if(philTakeDmg(h.damage||2,{ignoreInv:true,setInv:false,respawnToSafe:true})) h.cooldown=0.35;
-      }
+      eachPlayer(()=>{
+        if(!phil.dead&&h.cooldown<=0&&pitHitsPhil(h)){
+          if(philTakeDmg(h.damage||2,{ignoreInv:true,setInv:false,respawnToSafe:true})) h.cooldown=0.35;
+        }
+      });
       continue;
     }
     if(h.type==='rock'){
@@ -3529,12 +3772,15 @@ function updateHazards(dt){
         continue;
       }
       if(h.state==='idle'){
-        const cx=phil.x+phil.w/2;
-        if(!phil.dead&&cx>=h.triggerX.min&&cx<=h.triggerX.max&&phil.y+phil.h<=h.y+180&&phil.y>h.y-40){
-          h.state='warning';
-          h.warningTimer=ROCK_WARNING_DUR;
-          dustPuff(h.x+h.w/2,h.y+h.h);
-        }
+        eachPlayer(()=>{
+          if(h.state!=='idle') return;            // the other player already set it off
+          const cx=phil.x+phil.w/2;
+          if(!phil.dead&&cx>=h.triggerX.min&&cx<=h.triggerX.max&&phil.y+phil.h<=h.y+180&&phil.y>h.y-40){
+            h.state='warning';
+            h.warningTimer=ROCK_WARNING_DUR;
+            dustPuff(h.x+h.w/2,h.y+h.h);
+          }
+        });
         continue;
       }
       if(h.state==='warning'){
@@ -3551,14 +3797,18 @@ function updateHazards(dt){
         const nextY=h.y+h.vy*dt;
         const landY=getRockLandingY(h,nextY);
         h.y=landY==null ? nextY : landY;
-        if(!phil.dead&&overlap(phil,h)) philTakeDmg(h.damage||1);
+        eachPlayer(()=>{ if(!phil.dead&&overlap(phil,h)) philTakeDmg(h.damage||1); });
         if(landY!=null) shatterRock(h);
       }
     }
   }
-  if(phil.onGround&&!phil.dead&&!isPhilOverPit()&&!hazards.some(h=>hazardDamagingPhil(h))){
-    lastSafeGround={x:phil.x,y:phil.y};
-  }
+  // Each player keeps their own pit-teleport anchor, so this runs per player and
+  // eachPlayer's swap writes it back to the right one.
+  eachPlayer(()=>{
+    if(phil.onGround&&!phil.dead&&!isPhilOverPit()&&!hazards.some(h=>hazardDamagingPhil(h))){
+      lastSafeGround={x:phil.x,y:phil.y};
+    }
+  });
 }
 
 function hitEnemy(e, dmg){
@@ -3606,12 +3856,16 @@ function explodeBomb(p){
   p.dead=true; shake=Math.max(shake,0.55); SFX.bomb();
   burst(p.x,p.y,'#ff8844',18,180,140);
   burst(p.x,p.y,'#ffaa66',10,90,0);
-  if(phil.dead||phil.invTimer>0) return;
-  const dx=(phil.x+phil.w/2)-p.x, dy=(phil.y+phil.h/2)-p.y;
-  if(Math.hypot(dx,dy)<=p.radius){
-    philTakeDmg(1.0);
-    phil.vx=dx<0?-260:260; phil.vy=-280;
-  }
+  // A blast is a circle on the ground, not an aimed shot — it catches anyone
+  // standing in it.
+  eachPlayer(()=>{
+    if(phil.dead||phil.invTimer>0) return;
+    const dx=(phil.x+phil.w/2)-p.x, dy=(phil.y+phil.h/2)-p.y;
+    if(Math.hypot(dx,dy)<=p.radius){
+      philTakeDmg(1.0);
+      phil.vx=dx<0?-260:260; phil.vy=-280;
+    }
+  });
 }
 
 // ══════════════════════════════════════════════════════
@@ -3640,8 +3894,12 @@ function fireWeapon(wep){
     phil.boomOut=true;
     // 620 decaying at 0.28/s over BOOM_OUT reaches ~230px — past an archer's
     // 200px detection range, so it can be opened with rather than answered with
+    // Tagged with who threw it. It flies home to its owner, and clearing
+    // `boomOut` on the wrong player would leave the thrower unable to throw
+    // again for the rest of the level.
     projs.push({ type:'boomerang', hostile:false, x:mx-8, y:my-8, w:16, h:16,
-      vx:dir*620, vy:0, dir, dead:false, phase:'out', life:0, spin:0, hitSet:new Set() });
+      vx:dir*620, vy:0, dir, dead:false, phase:'out', life:0, spin:0,
+      owner:phil, hitSet:new Set() });
     SFX.whoosh();
   }
   phil.atkCD=wep.cd;
@@ -3693,12 +3951,18 @@ function updateBoomerang(p,dt){
     p.vx*=Math.pow(0.28,dt);                  // slows to a stop, then comes home
     if(p.life>=BOOM_OUT){ p.phase='back'; p.hitSet.clear(); }
   } else {
-    const cx=phil.x+phil.w/2, cy=phil.y+phil.h/2;
+    const own=p.owner||phil;
+    const cx=own.x+own.w/2, cy=own.y+own.h/2;
     const dx=cx-(p.x+8), dy=cy-(p.y+8), d=Math.hypot(dx,dy)||1;
     const spd=Math.min(760,320+(p.life-BOOM_OUT)*680);
     p.vx=dx/d*spd; p.vy=dy/d*spd;
-    // Caught — or given up on, if Phil died while it was in the air
-    if(d<22||phil.dead||p.life>4){ p.dead=true; phil.boomOut=false; if(d<22&&!phil.dead) SFX.whoosh(); return; }
+    // Caught — or given up on, if the thrower died or went down while it was in
+    // the air. Either way `boomOut` is cleared on the player who threw it.
+    if(d<22||own.dead||own.down||p.life>4){
+      p.dead=true; own.boomOut=false;
+      if(d<22&&!own.dead) SFX.whoosh();
+      return;
+    }
   }
   const dmg=WEAPONS.boomerang.dmg;
   for(const e of enemies){
@@ -3732,11 +3996,11 @@ function updateProjs(dt){
     }
     if(p.type==='boomerang'){
       updateBoomerang(p,dt);
-      if(p.dead){ phil.boomOut=false; projs.splice(i,1); }
+      if(p.dead){ (p.owner||phil).boomOut=false; projs.splice(i,1); }
       continue;
     }
     if(p.type==='bomb'){
-      if(!phil.dead&&overlap(p,phil)){ explodeBomb(p); }
+      eachPlayer(()=>{ if(!p.dead&&!phil.dead&&overlap(p,phil)) explodeBomb(p); });
       if(!p.dead){
         for(const pl of levelData.plats){ if(overlap(p,pl)){ explodeBomb(p); break; } }
       }
@@ -3976,7 +4240,7 @@ function updateGiant(dt){
     const sw=b.shockwaves[i];
     sw.x+=sw.vx*dt; sw.life-=dt;
     if(sw.life<=0){b.shockwaves.splice(i,1);continue;}
-    if(phil.onGround&&phil.invTimer<=0&&overlap(phil,sw)){ philTakeDmg(0.5); }
+    eachPlayer(()=>{ if(phil.onGround&&phil.invTimer<=0&&overlap(phil,sw)){ philTakeDmg(0.5); } });
   }
 
   switch(b.aiState){
@@ -4039,12 +4303,14 @@ function updateAnaconda(dt){
     sw.x+=sw.vx*dt; sw.y+=sw.vy*dt; sw.vy+=400*dt; sw.life-=dt;
     if(sw.life<=0){b.shockwaves.splice(i,1);continue;}
     const vb={x:sw.x-8,y:sw.y-8,w:16,h:16};
-    if(phil.invTimer<=0&&overlap(phil,vb)){ philTakeDmg(0.5); sw.life=0; }
+    eachPlayer(()=>{ if(phil.invTimer<=0&&overlap(phil,vb)){ philTakeDmg(0.5); sw.life=0; } });
     for(const pl of levelData.plats){ if(overlap(vb,pl)){sw.life=0;break;} }
   }
 
-  // Body segment damage
-  if(phil.invTimer<=0){
+  // Body segment damage — the whole serpent is solid, so it hurts either player
+  // that touches any part of it
+  eachPlayer(()=>{
+    if(phil.invTimer>0) return;
     for(let i=1;i<b.segCount;i++){
       const idx=Math.min(i*10,b.segHistory.length-1);
       if(idx<0)continue;
@@ -4054,7 +4320,7 @@ function updateAnaconda(dt){
         philTakeDmg(0.5); break;
       }
     }
-  }
+  });
 
   switch(b.aiState){
     case 'SLITHER':
@@ -4111,7 +4377,7 @@ function updateLizard(dt){
     const sw=b.shockwaves[i];
     sw.x+=sw.vx*dt; sw.life-=dt;
     if(sw.life<=0){b.shockwaves.splice(i,1);continue;}
-    if(phil.onGround&&phil.invTimer<=0&&overlap(phil,sw)){ philTakeDmg(0.5); }
+    eachPlayer(()=>{ if(phil.onGround&&phil.invTimer<=0&&overlap(phil,sw)){ philTakeDmg(0.5); } });
   }
 
   // Laser damage
@@ -4122,11 +4388,15 @@ function updateLizard(dt){
     const lx2=bx+Math.cos(b.laserAngle)*600;
     const ly2=by+Math.sin(b.laserAngle)*600;
     // Simple AABB vs line: check player center distance to line
-    const pcx=phil.x+phil.w/2, pcy=phil.y+phil.h/2;
     const ldx=lx2-bx, ldy=ly2-by, llen=Math.hypot(ldx,ldy)||1;
-    const t=((pcx-bx)*ldx+(pcy-by)*ldy)/(llen*llen);
-    const perpX=pcx-(bx+t*ldx), perpY=pcy-(by+t*ldy);
-    if(t>0&&t<1&&Math.hypot(perpX,perpY)<20){ philTakeDmg(0.5); b.laserDmgTimer=0.4; }
+    // Aimed at one player, but it burns whoever is standing on the beam
+    eachPlayer(()=>{
+      if(phil.invTimer>0) return;
+      const pcx=phil.x+phil.w/2, pcy=phil.y+phil.h/2;
+      const t=((pcx-bx)*ldx+(pcy-by)*ldy)/(llen*llen);
+      const perpX=pcx-(bx+t*ldx), perpY=pcy-(by+t*ldy);
+      if(t>0&&t<1&&Math.hypot(perpX,perpY)<20){ philTakeDmg(0.5); b.laserDmgTimer=0.4; }
+    });
     b.laserAngle+=Math.sign((phil.y+phil.h/2)-by-Math.sin(b.laserAngle)*100)*0.8*dt;
   }
 
@@ -4168,7 +4438,7 @@ function updateLizard(dt){
       const tx=b.x+(b.facingR?0:b.w)+tailDir*80;
       const ty=GROUND_Y-30;
       const tailBox={x:tx-30,y:ty-30,w:60,h:30};
-      if(phil.invTimer<=0&&overlap(phil,tailBox)){ philTakeDmg(0.5); }
+      eachPlayer(()=>{ if(phil.invTimer<=0&&overlap(phil,tailBox)){ philTakeDmg(0.5); } });
       if(b.stTimer<=0){ b.aiState='WALK'; b.stTimer=1.5+Math.random(); }
       break;
   }
@@ -4196,7 +4466,7 @@ function updateMech(dt){
       b.fists.splice(i,1); continue;
     }
     const fb={x:f.x-15,y:f.y-15,w:30,h:30};
-    if(phil.invTimer<=0&&overlap(phil,fb)){ philTakeDmg(mechDmg(b,1.0)); f.life=0; }
+    eachPlayer(()=>{ if(phil.invTimer<=0&&overlap(phil,fb)){ philTakeDmg(mechDmg(b,1.0)); f.life=0; } });
   }
 
   // Shockwaves
@@ -4206,9 +4476,11 @@ function updateMech(dt){
     if(sw.life<=0){b.shockwaves.splice(i,1);continue;}
     // Ground waves can still be jumped; the stomp column cannot, so standing on
     // top of a stomp is punished without taking the dodge away from the waves.
-    if((sw.column||phil.onGround)&&phil.invTimer<=0&&overlap(phil,sw)){
-      philTakeDmg(mechDmg(b,sw.column?1.0:0.5));
-    }
+    eachPlayer(()=>{
+      if((sw.column||phil.onGround)&&phil.invTimer<=0&&overlap(phil,sw)){
+        philTakeDmg(mechDmg(b,sw.column?1.0:0.5));
+      }
+    });
   }
 
   // Laser eyes
@@ -4222,15 +4494,24 @@ function updateMech(dt){
       const ang=Math.atan2(targetY-eyeY,targetX-eyeX);
       b.laserAngle+=(ang-b.laserAngle)*Math.min(1,2*dt);
       // Check player on line
-      const dist=Math.hypot(targetX-eyeX,targetY-eyeY);
-      if(dist<400){ const perp=Math.abs((targetY-eyeY)*Math.cos(b.laserAngle)-(targetX-eyeX)*Math.sin(b.laserAngle)); if(perp<16){ philTakeDmg(mechDmg(b,1.0)); } }
+      // The beam tracks the player it is aimed at, but it burns anyone standing
+      // in it — a second player is not safe just because he isn't the target.
+      eachPlayer(()=>{
+        if(phil.invTimer>0) return;
+        const tx=phil.x+phil.w/2, ty=phil.y+phil.h/2;
+        const dist=Math.hypot(tx-eyeX,ty-eyeY);
+        if(dist<400){ const perp=Math.abs((ty-eyeY)*Math.cos(b.laserAngle)-(tx-eyeX)*Math.sin(b.laserAngle)); if(perp<16){ philTakeDmg(mechDmg(b,1.0)); } }
+      });
     }
   }
 
   // Phase 2+ sweep: a low beam raked across the floor that has to be jumped
-  if(b.aiState==='SWEEP'&&phil.invTimer<=0&&phil.onGround
-     &&Math.abs((phil.x+phil.w/2)-b.sweepX)<26){
-    philTakeDmg(mechDmg(b,1.0));
+  if(b.aiState==='SWEEP'){
+    eachPlayer(()=>{
+      if(phil.invTimer<=0&&phil.onGround&&Math.abs((phil.x+phil.w/2)-b.sweepX)<26){
+        philTakeDmg(mechDmg(b,1.0));
+      }
+    });
   }
 
   switch(b.aiState){
@@ -4338,7 +4619,11 @@ function updateGroundWaves(list, dt, requireGround=true){
     const sw=list[i];
     sw.x+=sw.vx*dt; sw.life-=dt;
     if(sw.life<=0){ list.splice(i,1); continue; }
-    if(phil.invTimer<=0&&(!requireGround||phil.onGround)&&overlap(phil,sw)) philTakeDmg(0.5);
+    // A ground wave sweeps the whole arena floor, so it hits either player it
+    // rolls through — not just the one the boss happens to be aimed at.
+    eachPlayer(()=>{
+      if(phil.invTimer<=0&&(!requireGround||phil.onGround)&&overlap(phil,sw)) philTakeDmg(0.5);
+    });
   }
 }
 
@@ -4354,9 +4639,14 @@ function shotHitsPlatforms(s){
   return false;
 }
 
+// True if the shot hit *a* player — callers use that to spend the projectile,
+// and either player catching it should do that.
 function shotHitsPhil(s, dmg=0.5){
-  if(phil.invTimer<=0&&overlap(phil,getShotBox(s))){ philTakeDmg(dmg); return true; }
-  return false;
+  let hit=false;
+  eachPlayer(()=>{
+    if(phil.invTimer<=0&&overlap(phil,getShotBox(s))){ philTakeDmg(dmg); hit=true; }
+  });
+  return hit;
 }
 
 function updateFrostWarden(dt){
@@ -4821,7 +5111,9 @@ function updateCaptainFlash(flash, dt){
     }
   } else {
     flash.life-=dt;
-    if(!flash.hit&&phil.invTimer<=0&&Math.hypot((phil.x+phil.w/2)-flash.x,(phil.y+phil.h/2)-flash.y)<flash.r){ philTakeDmg(0.5); flash.hit=true; }
+    eachPlayer(()=>{
+      if(!flash.hit&&phil.invTimer<=0&&Math.hypot((phil.x+phil.w/2)-flash.x,(phil.y+phil.h/2)-flash.y)<flash.r){ philTakeDmg(0.5); flash.hit=true; }
+    });
   }
 }
 
@@ -4989,13 +5281,37 @@ function updateBoss(dt){
 //  CAMERA
 // ══════════════════════════════════════════════════════
 function updateCam(dt){
-  let tx=phil.x+phil.w/2-W/2;
+  // Two players share one screen, so the camera holds the midpoint between them
+  // rather than following either one.
+  const anchorX = coop ? coopAnchorX() : phil.x;
+  let tx=anchorX+phil.w/2-W/2;
   if(boss){
     const focus=getBossFocusBox()||boss;
-    tx=(phil.x+focus.x+focus.w/2)/2-W/2;
+    tx=(anchorX+focus.x+focus.w/2)/2-W/2;
   }
   cam.x+=(tx-cam.x)*Math.min(1,7*dt);
   cam.x=Math.max(0,Math.min(cam.x,levelData.worldW-W));
+  if(coop) tetherPlayers();
+}
+
+// The midpoint of whoever is still up. A downed player is parked on their safe
+// ground and shouldn't drag the view backwards away from the live one.
+function coopAnchorX(){
+  const live=[P1,P2].filter(p=>p&&!p.down&&!p.dead);
+  if(!live.length) return (P1||phil).x;
+  return live.reduce((s,p)=>s+p.x,0)/live.length;
+}
+
+// One screen means neither player can leave it. Once the camera has settled,
+// anyone past the edge is stopped there — so a fast player tows a slow one along
+// instead of running off and stranding them.
+function tetherPlayers(){
+  for(const p of [P1,P2]){
+    if(!p||p.down) continue;
+    const minX=cam.x+4, maxX=cam.x+W-4-p.w;
+    if(p.x<minX){ p.x=minX; if(p.vx<0) p.vx=0; }
+    else if(p.x>maxX){ p.x=maxX; if(p.vx>0) p.vx=0; }
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -5608,6 +5924,27 @@ function drawHazards(){
   }
 }
 
+// One player's five hearts, with its label. A downed player's row greys out —
+// that is the difference between "no hearts left" and "out of the run".
+function drawHeartRow(label,labelX,firstX,p,labelColor){
+  ctx.save();
+  if(p.down) ctx.globalAlpha=0.45;
+  ctx.font='bold 13px monospace'; ctx.fillStyle=labelColor; ctx.textAlign='left';
+  ctx.fillText(label,labelX,20);
+  for(let i=0;i<5;i++){
+    const val=p.health-i;
+    const hx=firstX+i*30, hy=16;
+    if(val>=1){ ctx.fillStyle='#ff3333'; heartPath(hx,hy); ctx.fill(); }
+    else if(val>=.5){
+      ctx.fillStyle='#441111'; heartPath(hx,hy); ctx.fill();
+      ctx.save(); ctx.beginPath(); ctx.rect(hx-14,hy-14,14,28); ctx.clip();
+      ctx.fillStyle='#ff3333'; heartPath(hx,hy); ctx.fill(); ctx.restore();
+    } else { ctx.fillStyle='#441111'; heartPath(hx,hy); ctx.fill(); }
+    ctx.strokeStyle='#880000'; ctx.lineWidth=1.5; heartPath(hx,hy); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function heartPath(cx,cy){
   ctx.beginPath();
   ctx.arc(cx-4,cy,5,Math.PI*.8,Math.PI*.2,true);
@@ -5795,19 +6132,12 @@ function drawTutorialDone(){
 
 function drawHUD(){
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,W,48);
-  // Hearts
-  ctx.font='bold 13px monospace'; ctx.fillStyle='#cc4444'; ctx.textAlign='left'; ctx.fillText('HP:',10,20);
-  for(let i=0;i<5;i++){
-    const val=phil.health-i;
-    const hx=48+i*30, hy=16;
-    if(val>=1){ ctx.fillStyle='#ff3333'; heartPath(hx,hy); ctx.fill(); }
-    else if(val>=.5){
-      ctx.fillStyle='#441111'; heartPath(hx,hy); ctx.fill();
-      ctx.save(); ctx.beginPath(); ctx.rect(hx-14,hy-14,14,28); ctx.clip();
-      ctx.fillStyle='#ff3333'; heartPath(hx,hy); ctx.fill(); ctx.restore();
-    } else { ctx.fillStyle='#441111'; heartPath(hx,hy); ctx.fill(); }
-    ctx.strokeStyle='#880000'; ctx.lineWidth=1.5; heartPath(hx,hy); ctx.stroke();
-  }
+  // Hearts. In co-op each player has their own five, so the row is drawn twice —
+  // player one on the left as always, player two at the right-hand end of the
+  // band, which is the only part of this row that was ever empty.
+  const hudP1=coop?(P1||phil):phil;
+  drawHeartRow(coop?'P1:':'HP:',10,48,hudP1,'#cc4444');
+  if(coop&&P2) drawHeartRow('P2:',700,738,P2,P2_COLOR);
   // Between the hearts and the score sit the two things that are a second health
   // bar of their own. Both are optional, so a cursor lays them out and the score
   // starts wherever they finish — the score used to carry a hard-coded `charges
@@ -5889,9 +6219,11 @@ function drawHUD(){
   drawWeaponBox();
 
   // Controls hint
-  const controlsHint=ownedWeapons().length>1
-    ? 'A/D: Move   W/Space: Jump   Z: Attack   X: Shield   C: Swap weapon   Esc: Pause'
-    : 'A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause';
+  const controlsHint = coop
+    ? 'P1: A/D  W  Z  X          P2: ←/→  ↑  ,  .          Esc: Pause'
+    : (ownedWeapons().length>1
+      ? 'A/D: Move   W/Space: Jump   Z: Attack   X: Shield   C: Swap weapon   Esc: Pause'
+      : 'A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause');
   ctx.font='bold 10px monospace';
   const hintW=ctx.measureText(controlsHint).width;
   ctx.fillStyle='rgba(0,0,0,0.45)';
@@ -6068,16 +6400,50 @@ function drawSecretDoor(){
 // The lantern for the dark stage. Drawn over the world but under the HUD, and a
 // single radial fill is enough — canvas holds the last stop's colour past its
 // outer radius, so the rest of the screen stays black without a second pass.
-function drawDarkness(){
-  if(!secretRun||secretRun.theme!=='dark'||phil.dead) return;
-  const cx=phil.x+phil.w/2-cam.x, cy=phil.y+phil.h/2-cam.y;
-  const r=168+Math.sin(frameN*0.05)*6;
-  const g=ctx.createRadialGradient(cx,cy,18,cx,cy,r);
+// The dark secret stage. One player is a single gradient straight onto the
+// canvas; two players need two holes in one sheet of darkness, which a single
+// radial gradient cannot express — so the sheet is built on an offscreen canvas
+// where each lantern can be punched out with destination-out, then laid over the
+// scene in one piece. Built lazily: only the dark theme ever allocates it.
+let darkCv=null, darkCtx=null;
+function lanternGrad(c,cx,cy,r){
+  const g=c.createRadialGradient(cx,cy,18,cx,cy,r);
   g.addColorStop(0,'rgba(0,0,0,0)');
   g.addColorStop(0.55,'rgba(0,0,0,0.45)');
   g.addColorStop(1,'rgba(2,2,6,0.97)');
-  ctx.fillStyle=g;
-  ctx.fillRect(0,0,W,H);
+  return g;
+}
+function drawDarkness(){
+  if(!secretRun||secretRun.theme!=='dark') return;
+  const lit=(coop?[P1,P2]:[phil]).filter(p=>p&&!p.dead&&!p.down);
+  if(!lit.length) return;
+  const r=168+Math.sin(frameN*0.05)*6;
+  if(lit.length===1){
+    const p=lit[0];
+    ctx.fillStyle=lanternGrad(ctx,p.x+p.w/2-cam.x,p.y+p.h/2-cam.y,r);
+    ctx.fillRect(0,0,W,H);
+    return;
+  }
+  if(!darkCv){ darkCv=document.createElement('canvas'); darkCv.width=W; darkCv.height=H; darkCtx=darkCv.getContext('2d'); }
+  darkCtx.globalCompositeOperation='source-over';
+  darkCtx.clearRect(0,0,W,H);
+  darkCtx.fillStyle='rgba(2,2,6,0.97)';
+  darkCtx.fillRect(0,0,W,H);
+  // Each lantern erases its own hole. destination-out uses the gradient's alpha,
+  // and the gradient is opaque at the centre — so the hole is brightest there and
+  // fades to nothing at the rim, matching the one-player look.
+  darkCtx.globalCompositeOperation='destination-out';
+  for(const p of lit){
+    const cx=p.x+p.w/2-cam.x, cy=p.y+p.h/2-cam.y;
+    const g=darkCtx.createRadialGradient(cx,cy,18,cx,cy,r);
+    g.addColorStop(0,'rgba(0,0,0,1)');
+    g.addColorStop(0.55,'rgba(0,0,0,0.55)');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    darkCtx.fillStyle=g;
+    darkCtx.fillRect(0,0,W,H);
+  }
+  darkCtx.globalCompositeOperation='source-over';
+  ctx.drawImage(darkCv,0,0);
 }
 
 function drawFlag(x, y, color, waving){
@@ -6974,6 +7340,68 @@ function drawProjectiles(){
 // Active-power-up effects drawn behind Phil. Deliberately not the invTimer
 // blink: spawn invincibility flickers Phil himself, while the star wraps him in
 // a gold aura, so the two never read as the same state.
+// Draws whichever player `phil` currently points at. Player two wears his own
+// colour instead of the equipped skin so the two are never confused at a glance;
+// everything else — weapon, cloak, shield, aura — is the team's shared loadout.
+function drawCurrentPlayer(){
+  if(phil.down){ drawDownedPlayer(); return; }
+  if(phil.dead&&phil.deathTimer<=0) return;
+  const p2=phil.pid===2;
+  if(!phil.dead) drawPhilAura();
+  ctx.save();
+  if(phil.dead) ctx.globalAlpha=Math.max(0,phil.deathTimer/1.8);
+  drawStickman(phil.x,phil.y,phil.w,phil.h,{
+    facingR:phil.facingR, walkCycle:phil.walkCycle,
+    attacking:phil.attacking, atkTimer:phil.atkTimer, atkDur:curWeapon().dur||ATK_DUR,
+    shielding:phil.shielding,
+    color:p2?P2_COLOR:skinDef().color, swordColor:p2?P2_SWORD:skinDef().sword,
+    invTimer:phil.invTimer, dead:phil.dead,
+    isPlayer:true, scale:1, skin:p2?null:currentSkin,
+    // The shrink ray overrides the attack button, so Phil shouldn't be
+    // brandishing a bazooka he currently can't fire
+    weapon:hasRay?'sword':shop.equipped, boomOut:phil.boomOut, fireFx:phil.fireFx,
+    cloak:p2?null:shop.cloak, martial:!hasRay&&martialActive(), airborne:!phil.onGround,
+    shield:shop.shield, charges:phil.shieldCharges,
+  });
+  ctx.restore();
+  // A tag over each head, so nobody has to work out which stickman they are
+  if(coop){
+    ctx.save();
+    ctx.font='bold 10px monospace'; ctx.textAlign='center';
+    ctx.fillStyle=p2?P2_COLOR:'#8fd0ff';
+    ctx.fillText('P'+phil.pid,phil.x+phil.w/2-cam.x,phil.y-8-cam.y);
+    ctx.restore();
+  }
+}
+
+// A downed player: face-down, greyed out, with the rescue clock counting over
+// them so their partner knows how long is left.
+function drawDownedPlayer(){
+  const cx=phil.x+phil.w/2-cam.x, cy=phil.y+phil.h/2-cam.y;
+  const p2=phil.pid===2;
+  ctx.save();
+  ctx.globalAlpha=0.5;
+  ctx.translate(cx,cy);
+  ctx.rotate(Math.PI/2);              // laid out flat on the ground
+  ctx.translate(-phil.w/2,-phil.h/2);
+  drawStickman(0,0,phil.w,phil.h,{
+    facingR:true, walkCycle:0, attacking:false, atkTimer:0, atkDur:1,
+    shielding:false, color:p2?P2_COLOR:skinDef().color, swordColor:'#666',
+    invTimer:0, dead:true, isPlayer:true, scale:1, skin:null,
+    weapon:'sword', boomOut:false, fireFx:0, cloak:null, martial:false,
+    airborne:false, shield:null, charges:0,
+  });
+  ctx.restore();
+  const left=Math.max(0,REVIVE_DELAY-phil.downTimer);
+  const partnerUp=otherPlayer(phil)&&!otherPlayer(phil).down;
+  ctx.save();
+  ctx.font='bold 11px monospace'; ctx.textAlign='center';
+  ctx.fillStyle=partnerUp?'#7dffb0':'#ff8866';
+  ctx.fillText(partnerUp?('P'+phil.pid+' DOWN  '+left.toFixed(1)):'P'+phil.pid+' DOWN',
+               cx,cy-34);
+  ctx.restore();
+}
+
 function drawPhilAura(){
   const cx=phil.x+phil.w/2-cam.x, cy=phil.y+phil.h/2-cam.y;
   ctx.save();
@@ -8518,6 +8946,9 @@ function titleItems(){
   items.push({ id:'map', label:()=>'WORLD MAP' });
   items.push({ id:'campaign', label:()=> !saveState ? 'START GAME'
                                        : titleConfirm ? 'ERASE SAVE AND RESTART?' : 'NEW GAME' });
+  // A toggle rather than its own mode: co-op is how you play the campaign, not a
+  // separate thing to play. It takes effect at the start of the next level.
+  items.push({ id:'players', label:()=>'PLAYERS: '+(coopArmed?'2  (CO-OP)':'1') });
   items.push({ id:'modes', label:()=>'EXTRA MODES' });
   items.push({ id:'practice', label:()=>'PRACTICE' });
   items.push({ id:'museum', label:()=>'MUSEUM' });
@@ -8530,9 +8961,9 @@ function titleBox(i,count){
   const n=count||titleItems().length;
   // Tightens up as rows are added, so the footer never runs off the canvas. At 7+
   // the worlds subtitle is dropped too (see drawTitle) to buy back the space.
-  const gap=n>=9?23:(n>=7?24:(n>=6?27:(n>=5?28:32)));
-  const h  =n>=9?21:(n>=7?22:(n>=6?25:(n>=5?26:28)));
-  const top=n>=9?308:(n>=8?316:(n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372)))));
+  const gap=n>=10?21:(n>=9?23:(n>=7?24:(n>=6?27:(n>=5?28:32))));
+  const h  =n>=10?19:(n>=9?21:(n>=7?22:(n>=6?25:(n>=5?26:28))));
+  const top=n>=10?300:(n>=9?308:(n>=8?316:(n>=7?330:(n>=6?342:(n>=5?344:(n>=4?356:372))))));
   return { x:W/2-160, y:top+i*gap, w:320, h };
 }
 
@@ -8578,9 +9009,19 @@ function titleActivate(){
     openShop('TITLE');
   } else if(id==='music'){
     toggleMusic();
+  } else if(id==='players'){
+    toggleCoop();
   } else {
     cycleSkin(1);
   }
+}
+
+function toggleCoop(){
+  coopArmed=!coopArmed;
+  SFX.pickup();
+  // Remembered like the music setting: whoever sat down to play together last
+  // shouldn't have to set it again next time.
+  try{ localStorage.setItem('pe_coop',coopArmed?'1':'0'); }catch(e){}
 }
 
 function handleTitleInput(){
@@ -8598,6 +9039,7 @@ function handleTitleInput(){
         const id=items[titleSelect].id;
         if(id==='skin') cycleSkin(right?1:-1);
         else if(id==='music') toggleMusic();
+        else if(id==='players') toggleCoop();
       }
       else titleActivate();
     }
@@ -8640,7 +9082,9 @@ function drawTitle(){
   ctx.fillText('ESCAPE',W/2,250); ctx.shadowBlur=0;
 
   ctx.fillStyle='#aaccaa'; ctx.font='16px monospace';
-  ctx.fillText('A Stickman Warrior fights for freedom',W/2,300);
+  // At ten rows the menu starts at y=300, so the tagline moves up out of its way
+  // rather than sitting on the first row's box.
+  ctx.fillText('A Stickman Warrior fights for freedom',W/2,titleItems().length>=10?288:300);
   // Menu
   const items=titleItems();
   ctx.fillStyle='#667766'; ctx.font='12px monospace';
@@ -8867,6 +9311,7 @@ function drawPauseMenu(){
 // drift apart.
 function pauseActivate(){
   const id=pauseItems()[pauseSelect].id;
+  if(MUSEUM_FLUSH_ON.has(id)&&museumDirty) saveMuseum();
   if(id==='resume'){ paused=false; }
   else if(id==='endlessagain'){ paused=false; startEndlessRun(); }
   else if(id==='endlessquit'){ paused=false; exitEndless(); }
@@ -8882,6 +9327,11 @@ function pauseActivate(){
   else if(id==='map'){ paused=false; openMap(); }
   else if(id==='quit'){ paused=false; G.screen='TITLE'; }
 }
+
+// Every route above that abandons the level skips levelComplete(), so anything
+// met since the level started would be dropped. Cheap: saveMuseum no-ops unless
+// something new was actually seen.
+const MUSEUM_FLUSH_ON=new Set(['restart','map','quit','endlessquit','trainquit','tutskip']);
 
 function handlePauseTap(){
   if(!tapPoint) return;
@@ -10016,12 +10466,29 @@ function loop(ts){
       if(daily&&!daily.over&&!phil.dead) daily.timer+=dt;
 
       updatePlatforms(dt);   // must lead: riders are carried before they move themselves
-      updatePhil(dt);
-      updateEnemies(endless ? dt*endless.speed : dt);
+      tickFrameTimers(dt);   // the clocks that belong to the frame, not to a player
+      // One pass per player, each with `phil`, their pad and their safe ground
+      // swapped in. In a one-player run withPlayer is a straight call through,
+      // so this is the same single updatePhil(dt) it has always been.
+      const passLevel=levelData;
+      for(const p of (coop?[P1,P2]:[phil])){
+        // The first player through can end the level — clear it, or step through
+        // a secret door. Stop rather than run the second one against a level that
+        // no longer exists.
+        if(levelData!==passLevel||G.screen!=='PLAYING') break;
+        withPlayer(p,()=>updatePhil(dt));
+      }
+      updateCoop(dt);        // down timers and the rescue
+      updateEnemies(endless ? dt*endless.speed : dt);   // aims itself, per enemy
       // Boss Rush difficulty ramp: run the boss on a faster clock as the run goes
       // on. One call site speeds up movement, attack timers and recovery windows
       // for all 12 bosses without touching any individual boss AI.
+      // A boss fights one target at a time, so it picks the nearer player and
+      // commits for the frame. Its wide attacks — shockwaves, sweeps, the laser
+      // — still test both players; those checks run under eachPlayer.
+      if(boss) aimAI(nearestPlayer(boss.x+boss.w/2,boss.y+boss.h/2));
       updateBoss(G.mode==='RUSH'?dt*rush.speed:dt);
+      resetAim();            // everything past here means player one unless it says otherwise
       updatePet(dt);         // after the enemies move, so Rex bites where they are now
       updateProjs(dt);
       updatePickups(dt);
@@ -10088,26 +10555,10 @@ function loop(ts){
 
   drawPet();               // behind Phil: it trails him, and he stays the thing you watch
 
-  // Draw Phil
-  if(!phil.dead||phil.deathTimer>0){
-    if(!phil.dead) drawPhilAura();
-    ctx.save();
-    if(phil.dead) ctx.globalAlpha=Math.max(0,phil.deathTimer/1.8);
-    drawStickman(phil.x,phil.y,phil.w,phil.h,{
-      facingR:phil.facingR, walkCycle:phil.walkCycle,
-      attacking:phil.attacking, atkTimer:phil.atkTimer, atkDur:curWeapon().dur||ATK_DUR,
-      shielding:phil.shielding,
-      color:skinDef().color, swordColor:skinDef().sword,
-      invTimer:phil.invTimer, dead:phil.dead,
-      isPlayer:true, scale:1, skin:currentSkin,
-      // The shrink ray overrides the attack button, so Phil shouldn't be
-      // brandishing a bazooka he currently can't fire
-      weapon:hasRay?'sword':shop.equipped, boomOut:phil.boomOut, fireFx:phil.fireFx,
-      cloak:shop.cloak, martial:!hasRay&&martialActive(), airborne:!phil.onGround,
-      shield:shop.shield, charges:phil.shieldCharges,
-    });
-    ctx.restore();
-  }
+  // Draw the players. Player two is drawn first so player one is never hidden
+  // behind him.
+  if(coop&&P2) withPlayer(P2,()=>drawCurrentPlayer());
+  if(coop&&P1) withPlayer(P1,()=>drawCurrentPlayer()); else if(!coop) drawCurrentPlayer();
 
   ctx.restore(); // end shake
 
