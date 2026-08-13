@@ -20,6 +20,32 @@ canvas { display:block; image-rendering:pixelated; image-rendering:crisp-edges; 
    so it is never hit by accident mid-jump. It clears the pause menu's own rows,
    which are centred, so it stays tappable while the menu is open. */
 #tP{bottom:96px;left:15px;width:44px;height:44px;font-size:15px;background:rgba(160,120,220,0.18);border-color:rgba(180,150,235,0.45)}
+/* ── Two players on one device ──
+   Player two's buttons only exist in co-op, and turning them on re-lays the
+   whole pad: each player takes half the bottom edge, and *within their own half*
+   the order is the same one a single player already knows — movement under the
+   left thumb, actions under the right. Both halves therefore read L R S A J from
+   their own left, because both players face the same way; mirroring player two
+   would put his jump under his movement thumb.
+   Buttons shrink from 62px to 52px because ten of them have to fit across a
+   landscape phone. The size and the 62px pitch are set by the *narrowest* one
+   worth supporting — an iPhone SE in landscape, 667px — where the two clusters
+   come to 600px and leave a 47px channel down the middle. On anything larger
+   that channel just grows. Two people really want a tablet for this. */
+#touch .p2 { display:none; }
+#touch.co .p2 { display:flex; }
+#touch.co .tb { width:52px; height:52px; font-size:17px; }
+#touch.co #tL{bottom:16px;left:10px;right:auto}  #touch.co #tR{bottom:16px;left:72px;right:auto}
+#touch.co #tS{bottom:16px;left:134px;right:auto} #touch.co #tA{bottom:16px;left:196px;right:auto} #touch.co #tJ{bottom:16px;left:258px;right:auto}
+#touch.co #t2L{bottom:16px;right:258px} #touch.co #t2R{bottom:16px;right:196px}
+#touch.co #t2S{bottom:16px;right:134px} #touch.co #t2A{bottom:16px;right:72px}  #touch.co #t2J{bottom:16px;right:10px}
+#touch.co #tP{bottom:82px;width:40px;height:40px;font-size:14px}
+/* Player two wears the same orange he does in the level, so nobody reaches for
+   the wrong pair mid-jump. */
+#t2L,#t2R{background:rgba(255,154,60,0.13);border-color:rgba(255,154,60,0.5)}
+#t2J{background:rgba(255,154,60,0.22);border-color:rgba(255,154,60,0.6)}
+#t2A{background:rgba(255,120,50,0.22);border-color:rgba(255,120,50,0.6)}
+#t2S{background:rgba(255,190,90,0.2);border-color:rgba(255,190,90,0.6)}
 </style>
 </head>
 <body>
@@ -28,11 +54,30 @@ canvas { display:block; image-rendering:pixelated; image-rendering:crisp-edges; 
   <div class="tb" id="tL">◀</div><div class="tb" id="tR">▶</div>
   <div class="tb" id="tJ">▲</div><div class="tb" id="tA">⚔</div><div class="tb" id="tS">🛡</div>
   <div class="tb" id="tP">❚❚</div>
+  <div class="tb p2" id="t2L">◀</div><div class="tb p2" id="t2R">▶</div>
+  <div class="tb p2" id="t2J">▲</div><div class="tb p2" id="t2A">⚔</div><div class="tb p2" id="t2S">🛡</div>
 </div>
 <script>
 // ══════════════════════════════════════════════════════
 //  CANVAS
 // ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+//  STORAGE
+// ══════════════════════════════════════════════════════
+// Every save in this game goes through here. Touching `localStorage` directly is
+// not safe: Safari with "Block All Cookies" on, private webviews, and sandboxed
+// or data: URL contexts all *throw* on the property access rather than returning
+// null. Several of these reads run at the top level, so one throw killed the
+// whole script and the game came up as a blank black page with no clue why —
+// the same shape of failure as the old bare `AudioContext` reference.
+// Saving is best-effort by design: a player with storage switched off can still
+// play, they just don't keep anything.
+const LS = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} },
+  del(k){ try{ localStorage.removeItem(k); }catch(e){} },
+};
+
 const W = 960, H = 540;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
@@ -51,7 +96,7 @@ let AC = null;
 // touching the sound effects, which stay wired straight to the destination.
 let musicGain = null;
 const MUSIC_VOL = 0.26;             // sits under the SFX on purpose
-let musicOn = (localStorage.getItem('pe_music') !== 'off');
+let musicOn = (LS.get('pe_music') !== 'off');
 function initAC() {
   // Via window, not bare identifiers: `AudioContext || webkitAudioContext` throws
   // a ReferenceError instead of falling back when the unprefixed name is missing,
@@ -408,7 +453,7 @@ function updateMusic(){
 
 function setMusicOn(on){
   musicOn=on;
-  try{ localStorage.setItem('pe_music',on?'on':'off'); }catch(e){}
+  try{ LS.set('pe_music',on?'on':'off'); }catch(e){}
   if(musicGain&&AC){
     musicGain.gain.cancelScheduledValues(AC.currentTime);
     musicGain.gain.setTargetAtTime(on?MUSIC_VOL:0,AC.currentTime,0.05);
@@ -421,6 +466,12 @@ function toggleMusic(){ initAC(); setMusicOn(!musicOn); SFX.pickup(); }
 //  INPUT
 // ══════════════════════════════════════════════════════
 const keys={}, touches={L:false,R:false,J:false,A:false,S:false,P:false,start:false};
+// Player two's own buttons. A separate object rather than a second set of keys
+// on the first, so `padTouch` can pick a whole pad by which player it is reading
+// for, and so clearing one player's held buttons can never clear the other's.
+// Pause and the tap-to-continue reads stay on `touches`: there is one pause, and
+// either player tapping the canvas should advance a screen.
+const touches2={L:false,R:false,J:false,A:false,S:false};
 // iPadOS Safari defaults to desktop-class browsing and does not put `ontouchstart`
 // on window, so an iPad reported itself as a desktop and got no on-screen controls
 // at all — unplayable without a keyboard. A coarse primary pointer catches it.
@@ -460,41 +511,57 @@ if(!hasTouchEvents){
   canvas.addEventListener('pointerup',e=>{ if(e.pointerType!=='mouse') touches.start=false; });
   canvas.addEventListener('pointercancel',()=>{ touches.start=false; });
 }
-function bindT(id,p,onPress){ const el=document.getElementById(id);
-  el.addEventListener('touchstart',e=>{e.preventDefault();initAC();touches[p]=true; onPress&&onPress()},{passive:false});
-  el.addEventListener('touchend',e=>{e.preventDefault();touches[p]=false},{passive:false});
-  el.addEventListener('touchcancel',()=>touches[p]=false);
+function bindT(id,p,onPress,store=touches){ const el=document.getElementById(id);
+  el.addEventListener('touchstart',e=>{e.preventDefault();initAC();store[p]=true; onPress&&onPress()},{passive:false});
+  el.addEventListener('touchend',e=>{e.preventDefault();store[p]=false},{passive:false});
+  el.addEventListener('touchcancel',()=>store[p]=false);
   // Pointer fallback for touch devices that don't dispatch touch events (an iPad
   // in desktop mode). Only bound where touch events are absent, so a phone keeps
   // exactly the path above and no button can fire twice for one press.
   if(hasTouchEvents) return;
-  el.addEventListener('pointerdown',e=>{e.preventDefault();initAC();touches[p]=true; onPress&&onPress()});
-  el.addEventListener('pointerup',  e=>{e.preventDefault();touches[p]=false});
-  el.addEventListener('pointercancel',()=>touches[p]=false);
-  el.addEventListener('pointerleave',()=>touches[p]=false); }
+  el.addEventListener('pointerdown',e=>{e.preventDefault();initAC();store[p]=true; onPress&&onPress()});
+  el.addEventListener('pointerup',  e=>{e.preventDefault();store[p]=false});
+  el.addEventListener('pointercancel',()=>store[p]=false);
+  el.addEventListener('pointerleave',()=>store[p]=false); }
 if(isTouchDevice){ document.getElementById('touch').style.display='block';
   bindT('tL','L');bindT('tR','R',()=>handleWorldCheatTouch('r'));bindT('tJ','J',()=>handleWorldCheatTouch('j'));
   // The sword button had no cheat callback at all, so no code could use it
   bindT('tA','A',()=>handleWorldCheatTouch('a'));bindT('tS','S',()=>handleWorldCheatTouch('s'));
   // No cheat callback: pause is not part of any code, and feeding it into the
   // buffers would let a pause mid-sequence trigger one
-  bindT('tP','P'); }
+  bindT('tP','P');
+  // Player two's pad writes to its own object. No cheat callbacks on any of
+  // them: the codes are one input stream, and a second player pressing his own
+  // buttons would corrupt a sequence the first player was in the middle of.
+  bindT('t2L','L',null,touches2); bindT('t2R','R',null,touches2); bindT('t2J','J',null,touches2);
+  bindT('t2A','A',null,touches2); bindT('t2S','S',null,touches2); }
 
 // The move/jump/attack pad is a fixed overlay pinned to the bottom of the window.
 // In landscape — which is how anyone plays a 16:9 platformer on a phone — that
 // lands it right on top of the world map's info panel and the lower title menu
 // rows, and the buttons swallow the taps meant for them. They mean nothing
 // outside actual play, so they only exist during it.
-let touchPadShown=true;
+let touchPadShown=true, touchPadCoop=false;
 function syncTouchPad(){
   if(!isTouchDevice) return;
   // Hidden while someone is speaking too: the dialogue box sits along the bottom
   // where the pad lives, and with the pad gone a tap anywhere advances the line
   const want = G.screen==='PLAYING' && !dlg;
+  // The co-op layout is driven off `coop`, not `coopArmed` — the second pad
+  // appears when a two-player level actually starts, not when the toggle is set,
+  // so the solo modes co-op is barred from never show a pad nobody can use.
+  if(coop!==touchPadCoop){
+    touchPadCoop=coop;
+    document.getElementById('touch').classList.toggle('co',coop);
+    touches2.L=touches2.R=touches2.J=touches2.A=touches2.S=false;
+  }
   if(want===touchPadShown) return;
   touchPadShown=want;
   document.getElementById('touch').style.display = want?'block':'none';
-  if(!want){ touches.L=touches.R=touches.J=touches.A=touches.S=touches.P=false; }
+  if(!want){
+    touches.L=touches.R=touches.J=touches.A=touches.S=touches.P=false;
+    touches2.L=touches2.R=touches2.J=touches2.A=touches2.S=false;
+  }
 }
 // One player reads every binding. Two players have to split them, so the game
 // keys live in pads and `pad` says whose turn to be read — updatePhil is run
@@ -509,9 +576,9 @@ const PAD_P2  ={ left:['ArrowLeft'], right:['ArrowRight'], jump:['ArrowUp'],
                  atk:['Comma'], shield:['Period'] };
 let pad=PAD_SOLO;
 const held=list=>list.some(k=>keys[k]);
-// The touch pad is a single physical device, so it drives player one only. A
-// second player needs a keyboard.
-const padTouch=f=>pad!==PAD_P2&&!!touches[f];
+// Each player reads his own pad. In one-player runs `pad` is never PAD_P2, so
+// this is the plain `touches[f]` it has always been.
+const padTouch=f=>pad===PAD_P2 ? !!touches2[f] : !!touches[f];
 
 const In={
   left:  ()=>held(pad.left)  ||padTouch('L'),
@@ -1182,7 +1249,7 @@ const TRAIN_ORDER = ['sword','shield','parkour','survive'];
 const TRAIN_KEY='pe_train';
 function loadTrain(){
   try{
-    const s=JSON.parse(localStorage.getItem(TRAIN_KEY));
+    const s=JSON.parse(LS.get(TRAIN_KEY));
     if(s&&typeof s==='object')
       return { best:(s.best&&typeof s.best==='object')?s.best:{},
                cleared:new Set((s.cleared||[]).filter(id=>TRAINING[id])) };
@@ -1191,12 +1258,12 @@ function loadTrain(){
 }
 let trainRec = loadTrain();
 function saveTrain(){
-  try{ localStorage.setItem(TRAIN_KEY,JSON.stringify({
+  try{ LS.set(TRAIN_KEY,JSON.stringify({
     best:trainRec.best, cleared:[...trainRec.cleared] })); }catch(e){}
 }
 
 const TUT_KEY='pe_tutorial';
-let tutorialDone = localStorage.getItem(TUT_KEY)==='done';
+let tutorialDone = LS.get(TUT_KEY)==='done';
 let tut = null;                 // { i, jumps, blocks, held, mercyT, flash, ... } while running
 let tutReturn='TITLE';          // where finishing sends the player
 let tutKeep=null;               // campaign score/lives parked while the tutorial runs
@@ -1448,7 +1515,7 @@ function getBossType(world,level){
 // ══════════════════════════════════════════════════════
 //  GAME STATE
 // ══════════════════════════════════════════════════════
-let G = { screen:'TITLE', mode:'CAMPAIGN', world:1, level:1, score:0, highScore:+localStorage.getItem('pe_hs')||0, lives:3, seenCuts:{} };
+let G = { screen:'TITLE', mode:'CAMPAIGN', world:1, level:1, score:0, highScore:+LS.get('pe_hs')||0, lives:3, seenCuts:{} };
 
 // ══════════════════════════════════════════════════════
 //  SAVED PROGRESS
@@ -1459,7 +1526,7 @@ const SAVE_KEY='pe_save', SAVE_VERSION=1;
 
 function readSave(){
   try{
-    const s=JSON.parse(localStorage.getItem(SAVE_KEY));
+    const s=JSON.parse(LS.get(SAVE_KEY));
     if(!s||s.v!==SAVE_VERSION) return null;
     // Where the player currently is, which since the world map exists is NOT
     // necessarily the furthest they've reached — picking an earlier level to
@@ -1474,7 +1541,7 @@ function readSave(){
 function writeSave(){
   if(G.mode!=='CAMPAIGN') return;             // Boss Rush never touches campaign progress
   try{
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
+    LS.set(SAVE_KEY, JSON.stringify({
       v:SAVE_VERSION, world:G.world, level:G.level,
       score:G.score, lives:G.lives, seenCuts:G.seenCuts||{},
     }));
@@ -1482,7 +1549,7 @@ function writeSave(){
   saveState=readSave();
 }
 function clearSave(){
-  try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
+  try{ LS.del(SAVE_KEY); }catch(e){}
   saveState=null;
 }
 let saveState=readSave();
@@ -1500,7 +1567,7 @@ const posRank=(w,l)=>w*100+l;
 
 function loadProgress(){
   try{
-    const p=JSON.parse(localStorage.getItem(PROG_KEY));
+    const p=JSON.parse(LS.get(PROG_KEY));
     if(p&&p.w>=1&&p.w<=TOTAL_WORLDS&&p.l>=1&&p.l<=11){
       const best={};
       if(p.best&&typeof p.best==='object'){
@@ -1516,7 +1583,7 @@ function loadProgress(){
 let progress=loadProgress();
 
 function saveProgress(){
-  try{ localStorage.setItem(PROG_KEY, JSON.stringify(progress)); }catch(e){}
+  try{ LS.set(PROG_KEY, JSON.stringify(progress)); }catch(e){}
 }
 function markReached(w,l){
   if(posRank(w,l)>posRank(progress.w,progress.l)){ progress.w=w; progress.l=l; saveProgress(); }
@@ -1553,19 +1620,19 @@ const SKIN_ORDER = ['phil','mario','sonica','minion','golden'];
 
 function loadUnlockedSkins(){
   try{
-    const v=JSON.parse(localStorage.getItem('pe_skins'));
+    const v=JSON.parse(LS.get('pe_skins'));
     if(Array.isArray(v)) return new Set(['phil',...v.filter(s=>SKINS[s])]);
   }catch(e){}
   return new Set(['phil']);
 }
 let unlockedSkins = loadUnlockedSkins();
-let currentSkin = SKINS[localStorage.getItem('pe_skin')] ? localStorage.getItem('pe_skin') : 'phil';
+let currentSkin = SKINS[LS.get('pe_skin')] ? LS.get('pe_skin') : 'phil';
 if(!unlockedSkins.has(currentSkin)) currentSkin='phil';
 
 function saveSkins(){
   try{
-    localStorage.setItem('pe_skins', JSON.stringify([...unlockedSkins]));
-    localStorage.setItem('pe_skin', currentSkin);
+    LS.set('pe_skins', JSON.stringify([...unlockedSkins]));
+    LS.set('pe_skin', currentSkin);
   }catch(e){}
 }
 function skinDef(){ return SKINS[currentSkin]||SKINS.phil; }
@@ -1587,7 +1654,7 @@ const SECRET_TOTAL = Object.keys(SECRET_LEVEL).length;
 
 function loadSecrets(){
   try{
-    const v=JSON.parse(localStorage.getItem('pe_secrets'));
+    const v=JSON.parse(LS.get('pe_secrets'));
     if(Array.isArray(v)) return new Set(v.filter(n=>SECRET_LEVEL[n]));
   }catch(e){}
   return new Set();
@@ -1595,7 +1662,7 @@ function loadSecrets(){
 let secretsFound = loadSecrets();
 
 function saveSecrets(){
-  try{ localStorage.setItem('pe_secrets', JSON.stringify([...secretsFound])); }catch(e){}
+  try{ LS.set('pe_secrets', JSON.stringify([...secretsFound])); }catch(e){}
 }
 
 // Awarded once the last secret is found, whichever one that happens to be.
@@ -1620,7 +1687,7 @@ const BOSS_SLOT = {
   captain:[6,5], agent:[6,10],
 };
 const RUSH_TOTAL = Object.keys(BOSS_SLOT).length + 1;   // 11 bosses + the Mech = 12
-let rush = { queue:[], idx:0, cleared:0, speed:1, best:+localStorage.getItem('pe_rush')||0 };
+let rush = { queue:[], idx:0, cleared:0, speed:1, best:+LS.get('pe_rush')||0 };
 let levelData = null, cam = {x:0,y:0}, frameN = 0, shake = 0;
 let phil, enemies, projs, pickups, hazards = [], boss, checkActivated, checkpointRespawn, lastSafeGround = null;
 let bossIntroTimer = 0, levelClearTimer = 0, deathTimer = 0;
@@ -1787,7 +1854,7 @@ function petCoinMul(){ return curPet().coinMul||1; }
 const SHOP_KEY = 'pe_shop';
 function loadShop(){
   try{
-    const s=JSON.parse(localStorage.getItem(SHOP_KEY));
+    const s=JSON.parse(LS.get(SHOP_KEY));
     if(s&&typeof s==='object'){
       const owned=new Set((s.owned||[]).filter(w=>WEAPONS[w]));
       owned.add('sword');                        // the sword is never not owned
@@ -1814,7 +1881,7 @@ function loadShop(){
 }
 let shop = loadShop();
 function saveShop(){
-  try{ localStorage.setItem(SHOP_KEY,JSON.stringify({
+  try{ LS.set(SHOP_KEY,JSON.stringify({
     coins:shop.coins, owned:[...shop.owned], equipped:shop.equipped,
     cloaks:[...shop.cloaks], cloak:shop.cloak,
     shields:[...shop.shields], shield:shop.shield,
@@ -1900,7 +1967,7 @@ function addScore(base){
 // these branches at all.
 let coop=false;            // is this run two-player?
 // The title toggle: what the NEXT level will start as. Persisted, like MUSIC.
-let coopArmed=(()=>{ try{ return localStorage.getItem('pe_coop')==='1'; }catch(e){ return false; } })();
+let coopArmed=(()=>{ try{ return LS.get('pe_coop')==='1'; }catch(e){ return false; } })();
 let P1=null, P2=null;      // the player objects; `phil` always points at one
 const P2_COLOR='#ff9a3c', P2_SWORD='#ffd9a0';
 const REVIVE_DELAY=3.0;    // seconds a downed player waits for the rescue
@@ -2292,7 +2359,7 @@ function tutorialFlagTouch(){
 
 function markTutorialDone(){
   tutorialDone=true;
-  try{ localStorage.setItem(TUT_KEY,'done'); }catch(e){}
+  try{ LS.set(TUT_KEY,'done'); }catch(e){}
 }
 
 function tutorialFinish(){
@@ -2512,7 +2579,7 @@ let endless = null;                              // { depth, speed, seed } while
 const ENDLESS_KEY='pe_endless';
 function loadEndless(){
   try{
-    const e=JSON.parse(localStorage.getItem(ENDLESS_KEY));
+    const e=JSON.parse(LS.get(ENDLESS_KEY));
     if(e&&typeof e==='object')
       return { bestDepth:Math.max(0,e.bestDepth|0), bestScore:Math.max(0,e.bestScore|0) };
   }catch(err){}
@@ -2520,7 +2587,7 @@ function loadEndless(){
 }
 let endlessRec = loadEndless();
 function saveEndless(){
-  try{ localStorage.setItem(ENDLESS_KEY,JSON.stringify(endlessRec)); }catch(e){}
+  try{ LS.set(ENDLESS_KEY,JSON.stringify(endlessRec)); }catch(e){}
 }
 
 function endlessSlot(depth){
@@ -2580,7 +2647,7 @@ function endlessRunOver(){
   if(d>endlessRec.bestDepth) endlessRec.bestDepth=d;
   if(sc>endlessRec.bestScore) endlessRec.bestScore=sc;
   saveEndless();
-  if(sc>G.highScore){ G.highScore=sc; try{localStorage.setItem('pe_hs',G.highScore);}catch(e){} }
+  if(sc>G.highScore){ G.highScore=sc; try{LS.set('pe_hs',G.highScore);}catch(e){} }
   if(museumDirty) saveMuseum();
   endless.finalDepth=d; endless.finalScore=sc;
   G.screen='ENDLESS_OVER';
@@ -2640,7 +2707,7 @@ function dailySlot(stamp){
 const DAILY_KEY='pe_daily';
 function loadDaily(){
   try{
-    const d=JSON.parse(localStorage.getItem(DAILY_KEY));
+    const d=JSON.parse(LS.get(DAILY_KEY));
     if(d&&typeof d==='object') return {
       day:        typeof d.day==='string'?d.day:'',
       lastWin:    typeof d.lastWin==='string'?d.lastWin:'',
@@ -2657,7 +2724,7 @@ function loadDaily(){
            streak:0, bestStreak:0, bestScore:0, wins:0 };
 }
 let dailyRec = loadDaily();
-function saveDaily(){ try{ localStorage.setItem(DAILY_KEY,JSON.stringify(dailyRec)); }catch(e){} }
+function saveDaily(){ try{ LS.set(DAILY_KEY,JSON.stringify(dailyRec)); }catch(e){} }
 
 function dailyPlayedToday(){ return dailyRec.done && dailyRec.day===dayStamp(); }
 // A streak only survives if the last win was literally yesterday. Shown as still
@@ -2737,7 +2804,7 @@ function dailyFinish(won){
     dailyRec.streak=0;              // the streak counts days finished, so losing ends it
   }
   if(G.score>dailyRec.bestScore) dailyRec.bestScore=G.score;
-  if(G.score>G.highScore){ G.highScore=G.score; try{localStorage.setItem('pe_hs',G.highScore);}catch(e){} }
+  if(G.score>G.highScore){ G.highScore=G.score; try{LS.set('pe_hs',G.highScore);}catch(e){} }
   if(museumDirty) saveMuseum();
   saveDaily();
 }
@@ -2812,8 +2879,8 @@ function rushBossCleared(){
 function rushNextFight(){
   rush.idx++;
   if(rush.idx>=rush.queue.length){
-    if(G.score>rush.best){ rush.best=G.score; try{localStorage.setItem('pe_rush',rush.best);}catch(e){} }
-    if(G.score>G.highScore){ G.highScore=G.score; try{localStorage.setItem('pe_hs',G.highScore);}catch(e){} }
+    if(G.score>rush.best){ rush.best=G.score; try{LS.set('pe_rush',rush.best);}catch(e){} }
+    if(G.score>G.highScore){ G.highScore=G.score; try{LS.set('pe_hs',G.highScore);}catch(e){} }
     G.screen='RUSH_COMPLETE';
     return;
   }
@@ -4218,7 +4285,7 @@ function bossKilled(){
     // fight has to pay out here or it would be the only boss that pays nothing
     addCoins(COIN_BOSS*2);
     setTimeout(()=>{
-      if(G.score>G.highScore){G.highScore=G.score;localStorage.setItem('pe_hs',G.highScore);}
+      if(G.score>G.highScore){G.highScore=G.score;LS.set('pe_hs',G.highScore);}
       clearSave();                // campaign finished — next run starts fresh
       playCutscene('ending',()=>{ G.screen='WIN'; });
     },3200);
@@ -6220,7 +6287,8 @@ function drawHUD(){
 
   // Controls hint
   const controlsHint = coop
-    ? 'P1: A/D  W  Z  X          P2: ←/→  ↑  ,  .          Esc: Pause'
+    ? (isTouchDevice ? 'P1: buttons on the left          P2: buttons on the right'
+                     : 'P1: A/D  W  Z  X          P2: ←/→  ↑  ,  .          Esc: Pause')
     : (ownedWeapons().length>1
       ? 'A/D: Move   W/Space: Jump   Z: Attack   X: Shield   C: Swap weapon   Esc: Pause'
       : 'A/D: Move   W/Space: Jump   Z: Sword   X: Shield   Esc: Pause');
@@ -7894,7 +7962,7 @@ const MUSEUM = [
 const MUSEUM_KEY='pe_museum';
 function loadMuseum(){
   try{
-    const m=JSON.parse(localStorage.getItem(MUSEUM_KEY));
+    const m=JSON.parse(LS.get(MUSEUM_KEY));
     if(m&&typeof m==='object'){
       const ids=new Set(MUSEUM.map(e=>e.id));
       const kills={};
@@ -7907,7 +7975,7 @@ function loadMuseum(){
 let museum = loadMuseum();
 let museumDirty = false;
 function saveMuseum(){
-  try{ localStorage.setItem(MUSEUM_KEY,JSON.stringify({
+  try{ LS.set(MUSEUM_KEY,JSON.stringify({
     seen:[...museum.seen], kills:museum.kills })); }catch(e){}
   museumDirty=false;
 }
@@ -9021,7 +9089,7 @@ function toggleCoop(){
   SFX.pickup();
   // Remembered like the music setting: whoever sat down to play together last
   // shouldn't have to set it again next time.
-  try{ localStorage.setItem('pe_coop',coopArmed?'1':'0'); }catch(e){}
+  try{ LS.set('pe_coop',coopArmed?'1':'0'); }catch(e){}
 }
 
 function handleTitleInput(){

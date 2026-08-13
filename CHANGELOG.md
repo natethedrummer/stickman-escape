@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **Touch controls for player two.** Co-op shipped with the touch pad driving player one only, so
+  on a phone or an iPad the second player had nothing to press and the mode was unplayable without a
+  keyboard. Turning co-op on now re-lays the whole pad: each player takes half the bottom edge, and
+  *within their own half* the order is the one a single player already knows — movement under the
+  left thumb, actions under the right. Player two's buttons carry the same orange he does in the
+  level. Buttons shrink from 62px to 52px so ten of them fit; the sizing is set by the narrowest
+  device worth supporting (a phone in landscape at 667px, where the two clusters leave a 47px
+  channel down the middle). One physical device still means one pause button
 - **2-player local co-op.** A `PLAYERS: 1 / 2` toggle on the title screen; two stickmen on one
   screen, sharing the level, the score, the coins and the shop loadout. Player one keeps A/D, W or
   Space, Z and X; player two is the arrow keys with `,` to attack and `.` to shield. Player two is
@@ -84,6 +92,15 @@
   at the one level you get today, and the map would launch a campaign level with the attempt live
 
 ### Fixed
+- **The game no longer comes up as a blank black page when the browser blocks storage.** Safari with
+  "Block All Cookies" switched on, private webviews, and sandboxed or `data:` contexts all *throw* on
+  the `localStorage` property access rather than returning `null`. Six of those reads ran at the top
+  level — `musicOn`, the high score, the current skin, the Boss Rush best, `tutorialDone` — so one
+  throw killed the whole script before it defined anything, and the page rendered nothing at all with
+  no clue why. Every access now goes through one `LS` wrapper that swallows the throw; saving is
+  best-effort, so a player with storage switched off can still play, they just don't keep anything.
+  Same shape of failure as the old bare `AudioContext` reference, and found on mobile, which is
+  exactly where "Block All Cookies" gets switched on
 - **Museum records are no longer lost outside the normal level-complete path**
   ([#60](https://github.com/natethedrummer/stickman-escape/issues/60)). Unlocks and kill counts were
   held in memory and only written to `localStorage` by `levelComplete()`, which three paths never
